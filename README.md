@@ -17,15 +17,15 @@ cd oya-kuruma\worker
 ```
 
 ## 手順3: データ置き場(KV)を作って設定ファイルに自動で書く (PowerShell)
-まず設定ファイルを初期状態に戻してから、KVを作る。途中で `Ok to proceed? (y)` と聞かれたら `y` を押して Enter。
+まず設定ファイルを初期状態に戻してから、このアプリ専用のKV(名前 `OYA_KURUMA`)を作る。他アプリのKVとは混ぜない。途中で `Ok to proceed? (y)` と聞かれたら `y` を押して Enter。
 ```powershell
 git checkout wrangler.toml
-npx --yes wrangler kv namespace create KV
+npx --yes wrangler kv namespace create OYA_KURUMA
 ```
 `Success!` と出て、`"id": "..."` が表示されればOK(エラーが出たらその出力を貼って相談)。続けて、IDを調べて設定ファイルに書く。
 ```powershell
 $ns = npx wrangler kv namespace list 2>$null | Out-String | ConvertFrom-Json
-$id = ($ns | Where-Object { $_.title -like '*oya-kuruma*' } | Select-Object -First 1).id
+$id = ($ns | Where-Object { $_.title -eq 'OYA_KURUMA' } | Select-Object -First 1).id
 "KV id = $id"
 if ($id -match '^[0-9a-f]{32}$') {
   $utf8 = New-Object System.Text.UTF8Encoding $false
