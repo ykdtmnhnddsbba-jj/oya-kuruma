@@ -343,7 +343,16 @@ dialog h2 { margin: 0 0 4px; font-size: 19px; }
     if (codeBtn) codeBtn.onclick = async () => {
       try {
         const d = await api('/api/line/code', 'POST');
-        $('lineBody').insertAdjacentHTML('beforeend', `<div class="code">${d.code}</div><p>LINEのトークに「連携 ${d.code}」と送ってください(${d.expiresInMinutes}分以内)。送ったらこの画面を閉じて、もう一度「LINE通知」を開くと連携済みになります。</p>`);
+        const msg = `連携 ${d.code}`;
+        $('lineBody').insertAdjacentHTML('beforeend', `<div class="code">${d.code}</div><div class="row"><button id="lineCopy">「${msg}」をコピー</button></div><div class="err" id="lineCopyMsg"></div><p>コピーしたら、LINEのトークに貼り付けて送ってください(${d.expiresInMinutes}分以内)。送ったらこの画面を閉じて、もう一度「LINE通知」を開くと連携済みになります。</p>`);
+        $('lineCopy').onclick = async () => {
+          let ok = false;
+          try { await navigator.clipboard.writeText(msg); ok = true; } catch (e) {
+            try { const t = document.createElement('textarea'); t.value = msg; document.body.appendChild(t); t.select(); ok = document.execCommand('copy'); t.remove(); } catch (e2) {}
+          }
+          $('lineCopyMsg').style.color = ok ? '#1b6b3c' : '#b3382c';
+          $('lineCopyMsg').textContent = ok ? 'コピーしました。LINEに貼り付けて送ってください' : 'コピーできませんでした。上の数字を見て「' + msg + '」と入力してください';
+        };
         codeBtn.disabled = true;
       } catch (e) { alert(e.message); }
     };
