@@ -74,7 +74,7 @@ h3 { font-size: 17px; margin: 22px 4px 8px; }
 .row > button { flex: 1 1 120px; }
 .cbox { display: flex; gap: 8px; margin-top: 10px; }
 .cbox input { flex: 1; min-width: 0; }
-input, textarea { font: inherit; width: 100%; border: 2px solid var(--line); border-radius: 10px; padding: 10px; background: #fff; color: var(--ink); min-height: 46px; }
+input, textarea, select { font: inherit; width: 100%; border: 2px solid var(--line); border-radius: 10px; padding: 10px; background: #fff; color: var(--ink); min-height: 46px; }
 label { display: block; font-weight: 600; margin: 12px 0 4px; font-size: 15px; }
 .fab { position: fixed; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); max-width: 696px; margin: 0 auto; min-height: 56px; font-size: 18px; font-weight: 700; box-shadow: 0 4px 14px rgba(0,0,0,.25); }
 dialog { border: 0; border-radius: 18px; padding: 18px 16px; width: calc(100% - 24px); max-width: 520px; }
@@ -108,6 +108,21 @@ dialog h2 { margin: 0 0 4px; font-size: 19px; }
     <input type="text" id="fPlace" maxlength="60" required>
     <label for="fNote">メモ(任意)</label>
     <textarea id="fNote" rows="2" maxlength="300"></textarea>
+    <div id="repeatBox">
+      <label for="fRepeat">くり返し</label>
+      <select id="fRepeat">
+        <option value="">しない</option>
+        <option value="weekly">毎週(同じ曜日)</option>
+        <option value="biweekly">隔週(2週間ごと)</option>
+        <option value="monthly">毎月(同じ日)</option>
+      </select>
+      <div id="untilBox" hidden>
+        <label for="fUntil">いつまで</label>
+        <input type="date" id="fUntil">
+        <div class="note">1回ずつの予定として登録されます。あとから1回だけ変更・否認もできます。</div>
+      </div>
+    </div>
+    <div class="note" id="editNote" hidden>くり返しのうち、この1回だけを変更します。</div>
     <div class="err" id="formErr"></div>
     <div class="row">
       <button type="button" class="ghost" id="formCancel">やめる</button>
@@ -187,6 +202,7 @@ dialog h2 { margin: 0 0 4px; font-size: 19px; }
     const label = e.kind === 'busy' ? `${S.names.parent}の予定` : STATUS[e.status];
     let h = `<div class="card ${e.status}" data-id="${e.id}"><span class="badge ${e.status}">${label}</span>`;
     if (e.kind === 'request') h += `<span class="who">${esc(S.names.son)}さんの申請</span>`;
+    if (e.seriesId) h += '<span class="who"> ・くり返し</span>';
     h += `<div class="when">${esc(range(e))}</div><div class="place">${e.kind === 'request' ? '行き先・用途: ' : ''}${esc(e.place)}</div>`;
     if (e.note) h += `<div class="note">${esc(e.note)}</div>`;
     if (e.comments && e.comments.length) {
@@ -203,6 +219,7 @@ dialog h2 { margin: 0 0 4px; font-size: 19px; }
     }
     if (mine) {
       h += `<button class="ghost small" data-act="edit" data-id="${e.id}">変更</button><button class="ng small" data-act="delete" data-id="${e.id}">${e.kind === 'request' ? '申請を取り下げる' : '削除'}</button>`;
+      if (e.seriesId) h += `<button class="ng small" data-act="delete-following" data-id="${e.id}">この回以降をまとめて取り下げ</button>`;
     }
     return h + '</div></div>';
   }
@@ -285,6 +302,9 @@ dialog h2 { margin: 0 0 4px; font-size: 19px; }
     } else if (act === 'delete') {
       if (!confirm(e.kind === 'request' ? 'この申請を取り下げますか?' : 'この予定を削除しますか?')) return;
       run(() => api(`/api/events/${id}`, 'DELETE'));
+    } else if (act === 'delete-following') {
+      if (!confirm(`${fmtDay(e.start)} 以降のくり返し(この回を含む)をまとめて取り下げますか?`)) return;
+      run(() => api(`/api/events/${id}?scope=following`, 'DELETE'));
     } else if (act === 'edit') {
       openForm(e);
     }
@@ -304,10 +324,24 @@ dialog h2 { margin: 0 0 4px; font-size: 19px; }
       $('fStart').value = `${S.sel}T10:00`; $('fEnd').value = `${S.sel}T15:00`; $('fPlace').value = ''; $('fNote').value = '';
     }
     $('formErr').textContent = '';
+    $('repeatBox').hidden = !!e;
+    $('editNote').hidden = !(e && e.seriesId);
+    $('fRepeat').value = '';
+    $('untilBox').hidden = true;
+    $('fUntil').value = '';
     $('dlgForm').showModal();
   }
   $('fab').onclick = () => openForm(null);
   $('formCancel').onclick = () => $('dlgForm').close();
+  const defaultUntil = () => {
+    const d = new Date($('fStart').value.slice(0, 10) + 'T00:00');
+    d.setMonth(d.getMonth() + 3);
+    return ymd(d);
+  };
+  $('fRepeat').addEventListener('change', () => {
+    $('untilBox').hidden = !$('fRepeat').value;
+    if ($('fRepeat').value && !$('fUntil').value) $('fUntil').value = defaultUntil();
+  });
   $('fStart').addEventListener('change', () => {
     // 開始を動かしたら、終了が開始以前のときだけ同日の+3時間に直す
     if ($('fEnd').value <= $('fStart').value) {
@@ -321,7 +355,11 @@ dialog h2 { margin: 0 0 4px; font-size: 19px; }
     S.busy = true; $('formOk').disabled = true; $('formErr').textContent = '';
     try {
       const body = { start: $('fStart').value, end: $('fEnd').value, place: $('fPlace').value, note: $('fNote').value };
+      if (!editing && $('fRepeat').value) body.repeat = { type: $('fRepeat').value, until: $('fUntil').value };
       const r = editing ? await api(`/api/events/${editing.id}`, 'PATCH', body) : await api('/api/events', 'POST', body);
+      if (r.skipped && r.skipped.length) {
+        alert(`${r.events.length}回分を登録しました。\n次の日は、ほかの予定と重なるため除きました:\n` + r.skipped.map((x) => fmtDay(x.start)).join('、'));
+      }
       $('dlgForm').close();
       S.sel = r.event.start.slice(0, 10);
       S.month = new Date(Number(S.sel.slice(0, 4)), Number(S.sel.slice(5, 7)) - 1, 1);

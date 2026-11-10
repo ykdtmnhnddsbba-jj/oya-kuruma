@@ -115,4 +115,47 @@ assert.equal((await call('DELETE', `/api/events/${last.id}`, S)).status, 200);
 assert.equal(pushes.at(-1).body.to, 'U_PAR');
 assert.equal((await call('GET', '/api/events/zzz', S)).status, 404);
 
+// ---- くり返し ----
+pushes.length = 0;
+r = await call('POST', '/api/events', S, { start: '2026-12-01T10:00', end: '2026-12-01T12:00', place: '習い事の送迎', repeat: { type: 'weekly', until: '2026-12-29' } });
+assert.equal(r.status, 201);
+assert.deepEqual(r.data.events.map((e) => e.start.slice(0, 10)), ['2026-12-01', '2026-12-08', '2026-12-15', '2026-12-22', '2026-12-29']);
+assert.equal(new Set(r.data.events.map((e) => e.seriesId)).size, 1);
+assert.equal(pushes.length, 1); // まとめて1通
+assert.match(pushes[0].body.messages[0].text, /毎週.*計5回/s);
+const series = r.data.events;
+// 1回だけ変更できる(他の回は変わらない)
+r = await call('PATCH', `/api/events/${series[1].id}`, S, { start: '2026-12-08T13:00', end: '2026-12-08T15:00' });
+assert.equal(r.status, 200);
+let all = (await call('GET', '/api/events', S)).data.events.filter((e) => e.seriesId === series[0].seriesId);
+assert.equal(all.find((e) => e.id === series[1].id).start, '2026-12-08T13:00');
+assert.equal(all.find((e) => e.id === series[2].id).start, '2026-12-15T10:00');
+// 1回だけ否認できる
+r = await call('POST', `/api/events/${series[2].id}/decision`, P, { action: 'decline', comment: 'この日は無理' });
+assert.equal(r.data.event.status, 'declined');
+assert.equal((await call('GET', '/api/events', S)).data.events.filter((e) => e.seriesId === series[0].seriesId && e.status === 'active').length, 4);
+// 重なる日だけ除外して登録
+await call('POST', '/api/events', P, { start: '2027-01-12T09:00', end: '2027-01-12T18:00', place: '出張' });
+r = await call('POST', '/api/events', S, { start: '2027-01-05T10:00', end: '2027-01-05T12:00', place: '送迎', repeat: { type: 'weekly', until: '2027-01-19' } });
+assert.equal(r.data.events.length, 2);
+assert.deepEqual(r.data.skipped.map((x) => x.start.slice(0, 10)), ['2027-01-12']);
+// 隔週・毎月・上限・不正値
+r = await call('POST', '/api/events', S, { start: '2027-03-01T10:00', end: '2027-03-01T11:00', place: 'x', repeat: { type: 'biweekly', until: '2027-03-29' } });
+assert.deepEqual(r.data.events.map((e) => e.start.slice(0, 10)), ['2027-03-01', '2027-03-15', '2027-03-29']);
+r = await call('POST', '/api/events', S, { start: '2027-05-31T10:00', end: '2027-06-01T02:00', place: 'y', repeat: { type: 'monthly', until: '2027-09-30' } });
+assert.deepEqual(r.data.events.map((e) => e.start.slice(0, 10)), ['2027-05-31', '2027-07-31', '2027-08-31']);
+assert.equal(r.data.events[0].end, '2027-06-01T02:00'); // 日またぎの長さも保つ
+assert.equal((await call('POST', '/api/events', S, { start: '2028-01-01T10:00', end: '2028-01-01T11:00', place: 'z', repeat: { type: 'weekly', until: '2029-12-31' } })).status, 400);
+assert.equal((await call('POST', '/api/events', S, { start: '2028-01-01T10:00', end: '2028-01-01T11:00', place: 'z', repeat: { type: 'daily', until: '2028-02-01' } })).status, 400);
+assert.equal((await call('POST', '/api/events', S, { start: '2028-01-01T10:00', end: '2028-01-01T11:00', place: 'z', repeat: { type: 'weekly' } })).status, 400);
+// この回以降をまとめて取り下げ
+pushes.length = 0;
+r = await call('DELETE', `/api/events/${series[3].id}?scope=following`, S);
+assert.equal(r.data.removed, 2);
+all = (await call('GET', '/api/events', S)).data.events.filter((e) => e.seriesId === series[0].seriesId);
+assert.equal(all.length, 3);
+assert.equal(pushes.length, 1);
+// 親の他人の回は消せない
+assert.equal((await call('DELETE', `/api/events/${series[0].id}?scope=following`, P)).status, 403);
+
 console.log('all tests passed');

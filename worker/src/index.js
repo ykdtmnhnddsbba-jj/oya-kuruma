@@ -83,6 +83,36 @@ function range(e) {
     : `${fmt(e.start)}〜${fmt(e.end)}`;
 }
 
+const REPEAT_LABEL = { weekly: '毎週', biweekly: '隔週', monthly: '毎月' };
+const MAX_REPEAT = 60;
+// くり返しを1回ずつの [start, end] に展開する
+function expandRepeat(start, end, rep) {
+  if (!REPEAT_LABEL[rep.type]) throw new HttpError(400, 'くり返しの種類が正しくありません');
+  const until = String(rep.until || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(until)) throw new HttpError(400, 'くり返しの終了日を入れてください');
+  const sd = start.slice(0, 10);
+  if (until < sd) throw new HttpError(400, '終了日は開始日より後にしてください');
+  const ymd = (d) => [+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10)];
+  const [y, m, d] = ymd(sd);
+  const dayMs = 86400000;
+  const iso = (ms) => new Date(ms).toISOString().slice(0, 10);
+  const diff = Math.round((Date.UTC(...ymd(end.slice(0, 10))) - Date.UTC(y, m, d)) / dayMs);
+  const out = [];
+  for (let k = 0; k < 130; k++) {
+    let ms;
+    if (rep.type === 'monthly') {
+      ms = Date.UTC(y, m + k, d);
+      if (new Date(ms).getUTCDate() !== d) continue; // 31日などが無い月は飛ばす
+    } else {
+      ms = Date.UTC(y, m, d) + k * 7 * (rep.type === 'biweekly' ? 2 : 1) * dayMs;
+    }
+    if (iso(ms) > until) break;
+    out.push([iso(ms) + start.slice(10), iso(ms + diff * dayMs) + end.slice(10)]);
+    if (out.length > MAX_REPEAT) throw new HttpError(400, `くり返しは最大${MAX_REPEAT}回までです。終了日を早めてください`);
+  }
+  return out;
+}
+
 // ---------- LINE ----------
 async function linePush(env, role, body) {
   const uid = await env.KV.get('line:' + role);
@@ -181,28 +211,53 @@ async function route(req, env, ctx) {
     const place = text(b.place, 60);
     if (!place) throw new HttpError(400, me === 'son' ? '行き先・用途を入れてください' : '予定の内容を入れてください');
     const now = new Date().toISOString();
-    const ev = {
-      id: crypto.randomUUID(),
-      kind: me === 'son' ? 'request' : 'busy',
-      by: me,
-      place,
-      note: text(b.note, 300),
-      start: b.start,
-      end: b.end,
-      status: me === 'son' ? 'active' : 'busy',
-      comments: [],
-      createdAt: now,
-      updatedAt: now,
-    };
-    checkConflict(events, ev, null);
-    events.push(ev);
-    await save(env, events);
-    if (me === 'son') {
-      notify('parent', `【車を借りたい】\n${nameOf(env, 'son')}さんから申請です。\n${range(ev)}\n行き先・用途: ${ev.place}${ev.note ? '\nメモ: ' + ev.note : ''}\n\n問題があれば、サイトで「否認」かコメントをお願いします。`);
-    } else {
-      notify('son', `【親の予定】\n${nameOf(env, 'parent')}さんが車を使う予定を入れました。\n${range(ev)}\n内容: ${ev.place}`);
+    const rep = b.repeat && b.repeat.type ? b.repeat : null;
+    const slots = rep ? expandRepeat(b.start, b.end, rep) : [[b.start, b.end]];
+    const seriesId = rep ? crypto.randomUUID() : null;
+    const created = [];
+    const skipped = [];
+    for (const [st, en] of slots) {
+      const ev = {
+        id: crypto.randomUUID(),
+        kind: me === 'son' ? 'request' : 'busy',
+        by: me,
+        place,
+        note: text(b.note, 300),
+        start: st,
+        end: en,
+        status: me === 'son' ? 'active' : 'busy',
+        comments: [],
+        createdAt: now,
+        updatedAt: now,
+        ...(seriesId ? { seriesId } : {}),
+      };
+      try {
+        checkConflict(events, ev, null);
+      } catch (e) {
+        if (e instanceof HttpError && e.status === 409) {
+          skipped.push({ start: st, reason: e.message });
+          continue;
+        }
+        throw e;
+      }
+      events.push(ev);
+      created.push(ev);
     }
-    return json({ event: ev }, 201);
+    if (!created.length) throw new HttpError(409, skipped[0]?.reason || '時間が重なっています');
+    await save(env, events);
+    const first = created[0];
+    const last = created[created.length - 1];
+    const skipText = skipped.length ? `\n重なりのため除いた日: ${skipped.map((x) => fmtDay(x.start)).join('、')}` : '';
+    const whenText = rep
+      ? `${REPEAT_LABEL[rep.type]} ${first.start.slice(11, 16)}〜${first.end.slice(11, 16)} 計${created.length}回\n${fmtDay(first.start)} 〜 ${fmtDay(last.start)}`
+      : range(first);
+    const tag = rep ? '(くり返し)' : '';
+    if (me === 'son') {
+      notify('parent', `【車を借りたい${tag}】\n${nameOf(env, 'son')}さんから申請です。\n${whenText}\n行き先・用途: ${first.place}${first.note ? '\nメモ: ' + first.note : ''}${skipText}\n\n問題があれば、サイトで「否認」かコメントをお願いします。`);
+    } else {
+      notify('son', `【親の予定${tag}】\n${nameOf(env, 'parent')}さんが車を使う予定を入れました。\n${whenText}\n内容: ${first.place}${skipText}`);
+    }
+    return json({ event: first, events: created, skipped }, 201);
   }
 
   const m = path.match(/^\/api\/events\/([\w-]+)(?:\/(decision|comments))?$/);
@@ -270,17 +325,21 @@ async function route(req, env, ctx) {
       return json({ event: next });
     }
 
-    // 削除・取り消し
+    // 削除・取り消し(scope=following: 同じくり返しの、この回以降をまとめて)
     if (!sub && method === 'DELETE') {
       if (ev.by !== me) throw new HttpError(403, '自分の予定だけ消せます');
-      events.splice(idx, 1);
-      await save(env, events);
-      if (ev.kind === 'request' && ev.status === 'active') {
+      const following = url.searchParams.get('scope') === 'following' && ev.seriesId;
+      const removed = following ? events.filter((e) => e.seriesId === ev.seriesId && e.by === me && e.start >= ev.start) : [ev];
+      const ids = new Set(removed.map((e) => e.id));
+      await save(env, events.filter((e) => !ids.has(e.id)));
+      if (removed.length > 1) {
+        notify(other, `【くり返しの予定を取り消し】\n${nameOf(env, me)}さんが ${fmtDay(ev.start)} 以降の ${removed.length}回分(${ev.place})を取り消しました。`);
+      } else if (ev.kind === 'request' && ev.status === 'active') {
         notify('parent', `【申請の取り消し】\n${nameOf(env, 'son')}さんが取り消しました。\n${range(ev)}(${ev.place})`);
       } else if (ev.kind === 'busy') {
         notify('son', `【親の予定を削除】\n${range(ev)}(${ev.place})の予定がなくなりました。`);
       }
-      return json({ ok: true });
+      return json({ ok: true, removed: removed.length });
     }
   }
 
