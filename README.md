@@ -17,17 +17,24 @@ cd oya-kuruma\worker
 ```
 
 ## 手順3: データ置き場(KV)を作って設定ファイルに自動で書く (PowerShell)
+まず設定ファイルを初期状態に戻してから、KVを作る。途中で `Ok to proceed? (y)` と聞かれたら `y` を押して Enter。
 ```powershell
-$out = npx wrangler kv namespace create KV 2>&1 | Out-String
-$out
-$id = [regex]::Match($out, '"id"\s*:\s*"([0-9a-f]{32})"').Groups[1].Value
-"KV id = $id"
-$utf8 = New-Object System.Text.UTF8Encoding $false
-$toml = [IO.File]::ReadAllText("$PWD\wrangler.toml", $utf8) -replace 'REPLACE_WITH_KV_ID', $id
-[IO.File]::WriteAllText("$PWD\wrangler.toml", $toml, $utf8)
-Select-String -Path wrangler.toml -Pattern 'id ='
+git checkout wrangler.toml
+npx --yes wrangler kv namespace create KV
 ```
-最後の行に `id = "<32文字>"` が出ればOK。`KV id = ` が空なら、上に出力された id を手で `wrangler.toml` の `REPLACE_WITH_KV_ID` と置き換える。
+`Success!` と出て、`"id": "..."` が表示されればOK(エラーが出たらその出力を貼って相談)。続けて、IDを調べて設定ファイルに書く。
+```powershell
+$ns = npx wrangler kv namespace list 2>$null | Out-String | ConvertFrom-Json
+$id = ($ns | Where-Object { $_.title -like '*oya-kuruma*' } | Select-Object -First 1).id
+"KV id = $id"
+if ($id -match '^[0-9a-f]{32}$') {
+  $utf8 = New-Object System.Text.UTF8Encoding $false
+  $toml = [IO.File]::ReadAllText("$PWD\wrangler.toml", $utf8) -replace 'REPLACE_WITH_KV_ID', $id
+  [IO.File]::WriteAllText("$PWD\wrangler.toml", $toml, $utf8)
+  Select-String -Path wrangler.toml -Pattern 'id ='
+} else { "IDが取れませんでした。上の出力のidを手で wrangler.toml の REPLACE_WITH_KV_ID と置き換えてください" }
+```
+最後の行に `id = "<32文字>"` が出ればOK。
 
 ## 手順4: Worker を公開する (PowerShell)
 ```powershell
