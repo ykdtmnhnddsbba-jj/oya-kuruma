@@ -1,0 +1,311 @@
+// 親の車カレンダー: API (Cloudflare Workers + KV)
+// 利用者は2人だけ: son(借りる人) と parent(親)。ログイン不要で、専用リンクのトークンで本人確認する。
+
+const CORS = {
+  'access-control-allow-origin': '*',
+  'access-control-allow-headers': 'authorization, content-type',
+  'access-control-allow-methods': 'GET, POST, PATCH, DELETE, OPTIONS',
+};
+const JSON_H = { 'content-type': 'application/json; charset=utf-8', ...CORS };
+const DT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
+const enc = new TextEncoder();
+
+class HttpError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+
+const json = (obj, status = 200) => new Response(JSON.stringify(obj), { status, headers: JSON_H });
+
+function safeEq(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string' || !a || !b) return false;
+  const x = enc.encode(a);
+  const y = enc.encode(b);
+  let d = x.length ^ y.length;
+  for (let i = 0; i < Math.max(x.length, y.length); i++) d |= (x[i] || 0) ^ (y[i] || 0);
+  return d === 0;
+}
+
+function roleOf(req, env) {
+  const m = (req.headers.get('authorization') || '').match(/^Bearer\s+(.+)$/i);
+  if (!m) return null;
+  if (safeEq(m[1], env.TOKEN_SON)) return 'son';
+  if (safeEq(m[1], env.TOKEN_PARENT)) return 'parent';
+  return null;
+}
+
+const nameOf = (env, role) =>
+  role === 'son' ? env.NAME_SON || 'たろう' : env.NAME_PARENT || 'お母さん';
+
+// ---------- データ ----------
+async function load(env) {
+  const s = await env.KV.get('events');
+  return s ? JSON.parse(s) : [];
+}
+async function save(env, events) {
+  const cutoff = new Date(Date.now() - 90 * 86400000 + 9 * 3600000).toISOString().slice(0, 16);
+  const kept = events.filter((e) => e.end >= cutoff).slice(-500);
+  await env.KV.put('events', JSON.stringify(kept));
+}
+
+const text = (s, max) => String(s ?? '').trim().slice(0, max);
+
+function checkTimes(start, end) {
+  if (!DT.test(start || '') || !DT.test(end || '')) throw new HttpError(400, '日時の形式が正しくありません');
+  if (isNaN(new Date(start + ':00Z')) || isNaN(new Date(end + ':00Z'))) throw new HttpError(400, '日時が正しくありません');
+  if (end <= start) throw new HttpError(400, '終了は開始より後にしてください');
+}
+
+const overlap = (a, b) => a.start < b.end && b.start < a.end;
+const blocking = (e) => e.status === 'active' || e.status === 'busy';
+
+function checkConflict(events, cand, selfId) {
+  const hit = events.find((e) => e.id !== selfId && blocking(e) && overlap(e, cand));
+  if (hit) {
+    const what = hit.status === 'busy' ? `親の予定「${hit.place}」` : 'ほかの予定';
+    throw new HttpError(409, `${what}(${range(hit)})と時間が重なっています`);
+  }
+}
+
+const WD = ['日', '月', '火', '水', '木', '金', '土'];
+function fmtDay(s) {
+  const [y, m, d] = s.slice(0, 10).split('-').map(Number);
+  return `${m}/${d}(${WD[new Date(Date.UTC(y, m - 1, d)).getUTCDay()]})`;
+}
+function fmt(s) {
+  return `${fmtDay(s)} ${s.slice(11, 16)}`;
+}
+function range(e) {
+  return e.start.slice(0, 10) === e.end.slice(0, 10)
+    ? `${fmtDay(e.start)} ${e.start.slice(11, 16)}〜${e.end.slice(11, 16)}`
+    : `${fmt(e.start)}〜${fmt(e.end)}`;
+}
+
+// ---------- LINE ----------
+async function linePush(env, role, body) {
+  const uid = await env.KV.get('line:' + role);
+  if (!uid || !env.LINE_CHANNEL_TOKEN) return false;
+  const tok = role === 'son' ? env.TOKEN_SON : env.TOKEN_PARENT;
+  const link = env.SITE_URL ? `\n\n${env.SITE_URL}#t=${tok}` : '';
+  const r = await fetch('https://api.line.me/v2/bot/message/push', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${env.LINE_CHANNEL_TOKEN}` },
+    body: JSON.stringify({ to: uid, messages: [{ type: 'text', text: body + link }] }),
+  });
+  return r.ok;
+}
+async function lineReply(env, replyToken, body) {
+  if (!env.LINE_CHANNEL_TOKEN) return;
+  await fetch('https://api.line.me/v2/bot/message/reply', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${env.LINE_CHANNEL_TOKEN}` },
+    body: JSON.stringify({ replyToken, messages: [{ type: 'text', text: body }] }),
+  });
+}
+async function verifySignature(env, raw, sig) {
+  if (!env.LINE_CHANNEL_SECRET || !sig) return false;
+  const key = await crypto.subtle.importKey('raw', enc.encode(env.LINE_CHANNEL_SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const mac = new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(raw)));
+  let bin = '';
+  for (const b of mac) bin += String.fromCharCode(b);
+  return safeEq(btoa(bin), sig);
+}
+
+async function handleWebhook(req, env, ctx) {
+  const raw = await req.text();
+  if (!(await verifySignature(env, raw, req.headers.get('x-line-signature')))) {
+    return new Response('bad signature', { status: 401 });
+  }
+  const body = JSON.parse(raw);
+  for (const ev of body.events || []) {
+    const uid = ev.source?.userId;
+    if (ev.type === 'follow') {
+      ctx.waitUntil(lineReply(env, ev.replyToken, '友だち追加ありがとうございます。サイトの「LINE通知の設定」に出る6桁の数字を、このトークに「連携 123456」の形で送ってください。'));
+    } else if (ev.type === 'message' && ev.message?.type === 'text' && uid) {
+      const m = ev.message.text.match(/^\s*(?:連携|登録)\s*([0-9０-９]{6})\s*$/);
+      if (m) {
+        const code = m[1].replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
+        const role = await env.KV.get('code:' + code);
+        if (role) {
+          await env.KV.put('line:' + role, uid);
+          await env.KV.delete('code:' + code);
+          ctx.waitUntil(lineReply(env, ev.replyToken, `連携できました(${nameOf(env, role)}さん用)。これから車の予定の通知がここに届きます。`));
+        } else {
+          ctx.waitUntil(lineReply(env, ev.replyToken, '数字が違うか、期限切れです。サイトでもう一度数字を出してください。'));
+        }
+      } else {
+        ctx.waitUntil(lineReply(env, ev.replyToken, 'サイトの「LINE通知の設定」に出る6桁の数字を「連携 123456」の形で送ってください。'));
+      }
+    }
+  }
+  return json({ ok: true });
+}
+
+// ---------- ルーティング ----------
+async function route(req, env, ctx) {
+  const url = new URL(req.url);
+  const path = url.pathname.replace(/\/+$/, '') || '/';
+  const method = req.method;
+
+  if (method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
+  if (path === '/' && method === 'GET') return json({ ok: true, app: 'oya-kuruma' });
+  if (path === '/api/line/webhook' && method === 'POST') return handleWebhook(req, env, ctx);
+
+  const me = roleOf(req, env);
+  if (!me) throw new HttpError(401, 'このリンクは無効です');
+  const other = me === 'son' ? 'parent' : 'son';
+  const notify = (role, body) => ctx.waitUntil(linePush(env, role, body).catch(() => {}));
+  const readBody = async () => {
+    try {
+      return await req.json();
+    } catch {
+      throw new HttpError(400, '送信内容が読み取れません');
+    }
+  };
+
+  if (path === '/api/events' && method === 'GET') {
+    return json({
+      me,
+      names: { son: nameOf(env, 'son'), parent: nameOf(env, 'parent') },
+      events: await load(env),
+      lineLinked: !!(await env.KV.get('line:' + me)),
+    });
+  }
+
+  if (path === '/api/events' && method === 'POST') {
+    const b = await readBody();
+    checkTimes(b.start, b.end);
+    const events = await load(env);
+    const place = text(b.place, 60);
+    if (!place) throw new HttpError(400, me === 'son' ? '行き先・用途を入れてください' : '予定の内容を入れてください');
+    const now = new Date().toISOString();
+    const ev = {
+      id: crypto.randomUUID(),
+      kind: me === 'son' ? 'request' : 'busy',
+      by: me,
+      place,
+      note: text(b.note, 300),
+      start: b.start,
+      end: b.end,
+      status: me === 'son' ? 'active' : 'busy',
+      comments: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    checkConflict(events, ev, null);
+    events.push(ev);
+    await save(env, events);
+    if (me === 'son') {
+      notify('parent', `【車を借りたい】\n${nameOf(env, 'son')}さんから申請です。\n${range(ev)}\n行き先・用途: ${ev.place}${ev.note ? '\nメモ: ' + ev.note : ''}\n\n問題があれば、サイトで「否認」かコメントをお願いします。`);
+    } else {
+      notify('son', `【親の予定】\n${nameOf(env, 'parent')}さんが車を使う予定を入れました。\n${range(ev)}\n内容: ${ev.place}`);
+    }
+    return json({ event: ev }, 201);
+  }
+
+  const m = path.match(/^\/api\/events\/([\w-]+)(?:\/(decision|comments))?$/);
+  if (m) {
+    const [, id, sub] = m;
+    const events = await load(env);
+    const idx = events.findIndex((e) => e.id === id);
+    if (idx < 0) throw new HttpError(404, '予定が見つかりません(削除された可能性があります)');
+    const ev = events[idx];
+    const now = new Date().toISOString();
+
+    // 否認 / 否認の取り消し(親のみ)
+    if (sub === 'decision' && method === 'POST') {
+      if (me !== 'parent') throw new HttpError(403, '否認できるのは親だけです');
+      if (ev.kind !== 'request') throw new HttpError(400, '申請ではありません');
+      const b = await readBody();
+      if (!['decline', 'restore'].includes(b.action)) throw new HttpError(400, '操作が正しくありません');
+      const msg = text(b.comment, 500);
+      if (b.action === 'restore') checkConflict(events, ev, ev.id);
+      ev.status = b.action === 'decline' ? 'declined' : 'active';
+      ev.decidedAt = now;
+      ev.updatedAt = now;
+      if (msg) ev.comments.push({ by: me, text: msg, at: now });
+      events[idx] = ev;
+      await save(env, events);
+      notify('son', `${ev.status === 'declined' ? '【否認されました】\n今回は車を使えません。' : '【否認を取り消しました】\nこの予定は有効に戻りました。'}\n${range(ev)}\n行き先・用途: ${ev.place}${msg ? '\n\nコメント: ' + msg : ''}`);
+      return json({ event: ev });
+    }
+
+    // コメント(両者)
+    if (sub === 'comments' && method === 'POST') {
+      if (ev.kind !== 'request') throw new HttpError(400, 'コメントできるのは申請だけです');
+      const b = await readBody();
+      const msg = text(b.text, 500);
+      if (!msg) throw new HttpError(400, 'コメントを入れてください');
+      ev.comments.push({ by: me, text: msg, at: now });
+      ev.updatedAt = now;
+      events[idx] = ev;
+      await save(env, events);
+      notify(other, `【コメント】${nameOf(env, me)}さんより\n${range(ev)}(${ev.place})\n\n${msg}`);
+      return json({ event: ev });
+    }
+
+    // 変更
+    if (!sub && method === 'PATCH') {
+      if (ev.by !== me) throw new HttpError(403, '自分の予定だけ変更できます');
+      const b = await readBody();
+      const next = { ...ev, start: b.start ?? ev.start, end: b.end ?? ev.end, place: text(b.place ?? ev.place, 60), note: text(b.note ?? ev.note, 300) };
+      checkTimes(next.start, next.end);
+      if (!next.place) throw new HttpError(400, '内容を入れてください');
+      const timeChanged = next.start !== ev.start || next.end !== ev.end;
+      checkConflict(events, next, ev.id);
+      if (ev.kind === 'request' && ev.status === 'declined' && (timeChanged || next.place !== ev.place)) {
+        next.status = 'active';
+        delete next.decidedAt;
+      }
+      next.updatedAt = now;
+      events[idx] = next;
+      await save(env, events);
+      if (next.kind === 'request') {
+        notify('parent', `【申請を変更しました】\n${nameOf(env, 'son')}さんの申請が変わりました。\n${range(next)}\n行き先・用途: ${next.place}${next.note ? '\nメモ: ' + next.note : ''}`);
+      } else {
+        notify('son', `【親の予定を変更】\n${range(next)}\n内容: ${next.place}`);
+      }
+      return json({ event: next });
+    }
+
+    // 削除・取り消し
+    if (!sub && method === 'DELETE') {
+      if (ev.by !== me) throw new HttpError(403, '自分の予定だけ消せます');
+      events.splice(idx, 1);
+      await save(env, events);
+      if (ev.kind === 'request' && ev.status === 'active') {
+        notify('parent', `【申請の取り消し】\n${nameOf(env, 'son')}さんが取り消しました。\n${range(ev)}(${ev.place})`);
+      } else if (ev.kind === 'busy') {
+        notify('son', `【親の予定を削除】\n${range(ev)}(${ev.place})の予定がなくなりました。`);
+      }
+      return json({ ok: true });
+    }
+  }
+
+  // LINE連携
+  if (path === '/api/line/code' && method === 'POST') {
+    const code = String(crypto.getRandomValues(new Uint32Array(1))[0] % 1000000).padStart(6, '0');
+    await env.KV.put('code:' + code, me, { expirationTtl: 600 });
+    return json({ code, expiresInMinutes: 10 });
+  }
+  if (path === '/api/line/test' && method === 'POST') {
+    const ok = await linePush(env, me, '【テスト】通知はここに届きます。');
+    return json({ ok });
+  }
+
+  throw new HttpError(404, 'not found');
+}
+
+export default {
+  async fetch(req, env, ctx) {
+    try {
+      return await route(req, env, ctx);
+    } catch (e) {
+      if (e instanceof HttpError) return json({ error: e.message }, e.status);
+      console.error(e);
+      return json({ error: 'サーバーでエラーが起きました' }, 500);
+    }
+  },
+};

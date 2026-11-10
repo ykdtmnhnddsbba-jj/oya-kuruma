@@ -1,0 +1,118 @@
+import assert from 'node:assert/strict';
+import { createHmac } from 'node:crypto';
+import worker from './src/index.js';
+
+const store = new Map();
+const KV = {
+  get: async (k) => store.get(k) ?? null,
+  put: async (k, v) => void store.set(k, v),
+  delete: async (k) => void store.delete(k),
+};
+const env = { KV, TOKEN_SON: 'son-token', TOKEN_PARENT: 'parent-token', LINE_CHANNEL_TOKEN: 'tok', LINE_CHANNEL_SECRET: 'sec', SITE_URL: 'https://x.example/' };
+
+const pushes = [];
+globalThis.fetch = async (url, init) => {
+  pushes.push({ url, body: JSON.parse(init.body) });
+  return new Response('{}', { status: 200 });
+};
+const pending = [];
+const ctx = { waitUntil: (p) => pending.push(p) };
+
+async function call(method, path, token, body) {
+  const headers = { 'content-type': 'application/json' };
+  if (token) headers.authorization = 'Bearer ' + token;
+  const res = await worker.fetch(new Request('https://w.example' + path, { method, headers, body: body ? JSON.stringify(body) : undefined }), env, ctx);
+  await Promise.all(pending.splice(0));
+  return { status: res.status, data: await res.json() };
+}
+const S = 'son-token', P = 'parent-token';
+
+// 認証
+assert.equal((await call('GET', '/api/events', null)).status, 401);
+assert.equal((await call('GET', '/api/events', 'bad')).status, 401);
+assert.equal((await call('GET', '/api/events', S)).data.me, 'son');
+assert.equal((await call('GET', '/api/events', P)).data.me, 'parent');
+
+// LINE連携(コード→webhook)
+const code = (await call('POST', '/api/line/code', S)).data.code;
+assert.match(code, /^\d{6}$/);
+async function webhook(events, sig) {
+  const raw = JSON.stringify({ events });
+  const s = sig ?? createHmac('sha256', 'sec').update(raw).digest('base64');
+  const res = await worker.fetch(new Request('https://w.example/api/line/webhook', { method: 'POST', headers: { 'x-line-signature': s }, body: raw }), env, ctx);
+  await Promise.all(pending.splice(0));
+  return res.status;
+}
+assert.equal(await webhook([], 'wrong'), 401);
+assert.equal(await webhook([{ type: 'message', replyToken: 'r', source: { userId: 'U_SON' }, message: { type: 'text', text: `連携 ${code}` } }]), 200);
+assert.equal(store.get('line:son'), 'U_SON');
+const code2 = (await call('POST', '/api/line/code', P)).data.code;
+await webhook([{ type: 'message', replyToken: 'r', source: { userId: 'U_PAR' }, message: { type: 'text', text: `連携　${code2}`.replace('　', ' ') } }]);
+assert.equal(store.get('line:parent'), 'U_PAR');
+assert.equal((await call('GET', '/api/events', S)).data.lineLinked, true);
+
+// 申請 → 親にLINE
+pushes.length = 0;
+let r = await call('POST', '/api/events', S, { start: '2026-11-15T10:00', end: '2026-11-15T15:00', place: '買い物', note: '' });
+assert.equal(r.status, 201);
+assert.equal(r.data.event.status, 'active');
+assert.equal(pushes.at(-1).body.to, 'U_PAR');
+assert.match(pushes.at(-1).body.messages[0].text, /parent-token/);
+const id = r.data.event.id;
+
+// 入力チェック
+assert.equal((await call('POST', '/api/events', S, { start: '2026-11-15T10:00', end: '2026-11-15T09:00', place: 'x' })).status, 400);
+assert.equal((await call('POST', '/api/events', S, { start: '2026-11-15T10:00', end: '2026-11-15T11:00', place: '' })).status, 400);
+
+// 子は否認できない
+assert.equal((await call('POST', `/api/events/${id}/decision`, S, { action: 'decline' })).status, 403);
+assert.equal(r.data.event.status, 'active');
+
+// コメント往復
+pushes.length = 0;
+await call('POST', `/api/events/${id}/comments`, P, { text: '何時に帰る?' });
+assert.equal(pushes.at(-1).body.to, 'U_SON');
+await call('POST', `/api/events/${id}/comments`, S, { text: '15時です' });
+assert.equal(pushes.at(-1).body.to, 'U_PAR');
+
+// 重なる申請は不可、隣接はOK
+assert.equal((await call('POST', '/api/events', S, { start: '2026-11-15T14:00', end: '2026-11-15T16:00', place: 'a' })).status, 409);
+assert.equal((await call('POST', '/api/events', S, { start: '2026-11-15T15:00', end: '2026-11-15T16:00', place: 'a' })).status, 201);
+
+// 親の予定: 重なると不可 / 入れると子に通知 / 子の申請が重なると不可 / 子は消せない
+assert.equal((await call('POST', '/api/events', P, { start: '2026-11-15T12:00', end: '2026-11-15T13:00', place: '病院' })).status, 409);
+pushes.length = 0;
+r = await call('POST', '/api/events', P, { start: '2026-11-20T09:00', end: '2026-11-20T12:00', place: '病院' });
+assert.equal(r.data.event.status, 'busy');
+assert.equal(pushes.at(-1).body.to, 'U_SON');
+assert.equal((await call('POST', '/api/events', S, { start: '2026-11-20T11:00', end: '2026-11-20T13:00', place: 'a' })).status, 409);
+assert.equal((await call('DELETE', `/api/events/${r.data.event.id}`, S)).status, 403);
+
+// 時間変更しても有効のまま、親に通知
+pushes.length = 0;
+r = await call('PATCH', `/api/events/${id}`, S, { start: '2026-11-15T09:00', end: '2026-11-15T14:00' });
+assert.equal(r.data.event.status, 'active');
+assert.equal(pushes.at(-1).body.to, 'U_PAR');
+
+// 否認 → 子にLINE(コメント付き)
+pushes.length = 0;
+r = await call('POST', `/api/events/${id}/decision`, P, { action: 'decline', comment: 'その日は使う' });
+assert.equal(r.data.event.status, 'declined');
+assert.equal(pushes.at(-1).body.to, 'U_SON');
+assert.match(pushes.at(-1).body.messages[0].text, /否認/);
+assert.match(pushes.at(-1).body.messages[0].text, /その日は使う/);
+// 承認という操作はもう無い
+assert.equal((await call('POST', `/api/events/${id}/decision`, P, { action: 'approve' })).status, 400);
+// 否認された枠は他の申請を邪魔しない
+assert.equal((await call('POST', '/api/events', S, { start: '2026-11-15T09:30', end: '2026-11-15T10:30', place: 'b' })).status, 201);
+// 否認の取り消しは、重なる予定があると不可
+assert.equal((await call('POST', `/api/events/${id}/decision`, P, { action: 'restore' })).status, 409);
+
+// 取り消し
+pushes.length = 0;
+const last = (await call('GET', '/api/events', S)).data.events.find((e) => e.place === 'b');
+assert.equal((await call('DELETE', `/api/events/${last.id}`, S)).status, 200);
+assert.equal(pushes.at(-1).body.to, 'U_PAR');
+assert.equal((await call('GET', '/api/events/zzz', S)).status, 404);
+
+console.log('all tests passed');

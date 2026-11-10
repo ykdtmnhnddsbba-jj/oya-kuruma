@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="車カレンダー">
+<title>親の車カレンダー</title>
+<style>
+:root {
+  --bg: #f6f4ef; --card: #fff; --ink: #222; --sub: #6b6b6b; --line: #ddd8cc;
+  --pend: #f2b705; --pend-bg: #fff6d6;
+  --ok: #2e9e5b; --ok-bg: #dff4e6;
+  --busy: #3b6fd4; --busy-bg: #e1eafb;
+  --ng: #8a8a8a; --ng-bg: #ececec;
+  --accent: #1f6f6b;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 17px/1.55 -apple-system, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", sans-serif;
+  padding-bottom: calc(96px + env(safe-area-inset-bottom));
+}
+header { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 6px; gap: 8px; }
+h1 { font-size: 20px; margin: 0; }
+.who { font-size: 14px; color: var(--sub); }
+button { font: inherit; border: 0; border-radius: 12px; min-height: 48px; padding: 0 16px; cursor: pointer; background: var(--accent); color: #fff; }
+button.ghost { background: #fff; color: var(--accent); border: 2px solid var(--accent); }
+button.small { min-height: 40px; font-size: 15px; padding: 0 12px; }
+button.ok { background: var(--ok); }
+button.ng { background: #fff; color: #b3382c; border: 2px solid #b3382c; }
+button:disabled { opacity: .5; }
+main { padding: 0 12px; max-width: 720px; margin: 0 auto; }
+.banner { background: var(--pend-bg); border: 2px solid var(--pend); border-radius: 14px; padding: 12px 14px; margin: 8px 0; font-weight: 600; }
+.cal { background: var(--card); border-radius: 16px; padding: 10px 6px 12px; margin: 10px 0; border: 1px solid var(--line); }
+.cal-head { display: flex; align-items: center; justify-content: space-between; padding: 0 6px 6px; }
+.cal-head h2 { margin: 0; font-size: 19px; }
+.cal-head button { min-height: 44px; min-width: 52px; padding: 0 10px; }
+.grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.dow { text-align: center; font-size: 13px; color: var(--sub); padding: 2px 0; }
+.dow:first-child, .cell:nth-child(7n+1) .num { color: #c0392b; }
+.dow:nth-child(7), .cell:nth-child(7n) .num { color: #2563c0; }
+.cell { min-height: 72px; border: 1px solid transparent; border-radius: 10px; padding: 3px 2px; background: #faf9f5; text-align: left; color: var(--ink); display: flex; flex-direction: column; gap: 2px; overflow: hidden; }
+.cell.out { opacity: .35; }
+.cell.today { border-color: var(--accent); }
+.cell.sel { background: #e4f0ee; border-color: var(--accent); border-width: 2px; }
+.num { font-size: 14px; font-weight: 600; padding-left: 2px; }
+.chip { font-size: 11px; line-height: 1.25; border-radius: 5px; padding: 1px 3px; white-space: nowrap; overflow: hidden; text-overflow: clip; font-weight: 600; }
+.chip.active { background: var(--ok-bg); color: #1b6b3c; }
+.chip.busy { background: var(--busy-bg); color: #254e9e; }
+.chip.declined { background: var(--ng-bg); color: var(--ng); text-decoration: line-through; }
+.more { font-size: 11px; color: var(--sub); padding-left: 3px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: 13px; color: var(--sub); padding: 8px 8px 0; }
+h3 { font-size: 17px; margin: 22px 4px 8px; }
+.card { background: var(--card); border: 1px solid var(--line); border-left: 8px solid var(--line); border-radius: 14px; padding: 12px 14px; margin: 10px 0; }
+.card.active { border-left-color: var(--ok); }
+.card.busy { border-left-color: var(--busy); }
+.card.declined { border-left-color: var(--ng); background: #f7f7f7; }
+.badge { display: inline-block; font-size: 13px; font-weight: 700; border-radius: 999px; padding: 0 10px; margin-right: 6px; color: #fff; }
+.badge.active { background: var(--ok); }
+.badge.busy { background: var(--busy); }
+.badge.declined { background: var(--ng); }
+.when { font-size: 18px; font-weight: 700; margin: 4px 0 0; }
+.place { margin: 2px 0; }
+.note { color: var(--sub); font-size: 15px; white-space: pre-wrap; }
+.comments { margin: 8px 0 4px; display: flex; flex-direction: column; gap: 6px; }
+.bubble { border-radius: 12px; padding: 6px 10px; font-size: 15px; max-width: 92%; white-space: pre-wrap; word-break: break-word; }
+.bubble small { display: block; color: var(--sub); font-size: 12px; }
+.bubble.son { background: #e8f1ff; align-self: flex-start; }
+.bubble.parent { background: #ffe9ef; align-self: flex-end; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.row > button { flex: 1 1 120px; }
+.cbox { display: flex; gap: 8px; margin-top: 10px; }
+.cbox input { flex: 1; min-width: 0; }
+input, textarea { font: inherit; width: 100%; border: 2px solid var(--line); border-radius: 10px; padding: 10px; background: #fff; color: var(--ink); min-height: 46px; }
+label { display: block; font-weight: 600; margin: 12px 0 4px; font-size: 15px; }
+.fab { position: fixed; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); max-width: 696px; margin: 0 auto; min-height: 56px; font-size: 18px; font-weight: 700; box-shadow: 0 4px 14px rgba(0,0,0,.25); }
+dialog { border: 0; border-radius: 18px; padding: 18px 16px; width: calc(100% - 24px); max-width: 520px; }
+dialog::backdrop { background: rgba(0,0,0,.45); }
+dialog h2 { margin: 0 0 4px; font-size: 19px; }
+.err { color: #b3382c; font-weight: 600; margin-top: 10px; min-height: 1em; }
+.empty { color: var(--sub); padding: 8px 4px; }
+.code { font-size: 40px; letter-spacing: 6px; font-weight: 800; text-align: center; background: #f1efe8; border-radius: 12px; padding: 8px; margin: 10px 0; }
+.full { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 24px; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>親の車カレンダー</h1>
+    <div class="who" id="who"></div>
+  </div>
+  <button class="ghost small" id="btnLine">LINE通知</button>
+</header>
+<main id="main"></main>
+<button class="fab" id="fab" hidden>＋ 車を借りたい</button>
+
+<dialog id="dlgForm">
+  <form method="dialog" id="form">
+    <h2 id="formTitle"></h2>
+    <label for="fStart">開始</label>
+    <input type="datetime-local" id="fStart" required>
+    <label for="fEnd">終了(返す時間)</label>
+    <input type="datetime-local" id="fEnd" required>
+    <label for="fPlace" id="fPlaceLabel"></label>
+    <input type="text" id="fPlace" maxlength="60" required>
+    <label for="fNote">メモ(任意)</label>
+    <textarea id="fNote" rows="2" maxlength="300"></textarea>
+    <div class="err" id="formErr"></div>
+    <div class="row">
+      <button type="button" class="ghost" id="formCancel">やめる</button>
+      <button type="submit" id="formOk"></button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlgLine">
+  <h2>LINE通知の設定</h2>
+  <div id="lineBody"></div>
+  <div class="row"><button class="ghost" id="lineClose">閉じる</button></div>
+</dialog>
+
+<script src="config.js"></script>
+<script>
+(() => {
+  const CFG = window.OYA_CONFIG;
+  const $ = (id) => document.getElementById(id);
+  const WD = ['日', '月', '火', '水', '木', '金', '土'];
+  const STATUS = { active: '予定', declined: '否認', busy: '親の予定' };
+  const ICON = { active: '○', declined: '×', busy: '▲' };
+  const pad = (n) => String(n).padStart(2, '0');
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const short = (s) => { const h = Number(s.slice(11, 13)); return s.slice(14, 16) === '00' ? `${h}時` : `${h}:${s.slice(14, 16)}`; };
+  const nowStr = () => { const d = new Date(); return `${ymd(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+
+  // ---- トークン(専用リンクの #t=... を保存) ----
+  let token = null;
+  try { token = localStorage.getItem('oya_token'); } catch (e) {}
+  const hm = location.hash.match(/t=([\w-]+)/);
+  if (hm) {
+    token = hm[1];
+    try { localStorage.setItem('oya_token', token); } catch (e) {}
+    history.replaceState(null, '', location.pathname + location.search);
+  }
+
+  const S = { me: null, names: {}, events: [], lineLinked: false, month: new Date(), sel: ymd(new Date()), busy: false };
+  S.month.setDate(1);
+
+  async function api(path, method = 'GET', body) {
+    const res = await fetch(CFG.API + path, {
+      method,
+      headers: { authorization: 'Bearer ' + token, ...(body ? { 'content-type': 'application/json' } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    let data = {};
+    try { data = await res.json(); } catch (e) {}
+    if (res.status === 401) { invalid(); throw new Error('unauthorized'); }
+    if (!res.ok) throw new Error(data.error || '通信に失敗しました');
+    return data;
+  }
+  function invalid() {
+    document.body.innerHTML = '<div class="full"><div><h2>このリンクでは開けません</h2><p>LINEに届いたリンク、または最初に教えてもらったリンクからもう一度開いてください。</p></div></div>';
+  }
+
+  async function refresh() {
+    if (!token) return invalid();
+    try {
+      const d = await api('/api/events');
+      Object.assign(S, d);
+      render();
+    } catch (e) { if (e.message !== 'unauthorized') $('main').insertAdjacentHTML('afterbegin', '<div class="banner">読み込みに失敗しました。通信を確認してください。</div>'); }
+  }
+
+  // ---- 表示用 ----
+  const fmtDay = (s) => { const [y, m, d] = s.slice(0, 10).split('-').map(Number); return `${m}/${d}(${WD[new Date(y, m - 1, d).getDay()]})`; };
+  const fmtDT = (s) => `${fmtDay(s)} ${s.slice(11, 16)}`;
+  const range = (e) => e.start.slice(0, 10) === e.end.slice(0, 10) ? `${fmtDay(e.start)} ${e.start.slice(11, 16)}〜${e.end.slice(11, 16)}` : `${fmtDT(e.start)}〜${fmtDT(e.end)}`;
+  const at = (iso) => { const d = new Date(iso); return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+  const onDay = (e, day) => e.start.slice(0, 10) <= day && e.end.slice(0, 10) >= day;
+  const byStart = (a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0);
+
+  function cardHtml(e) {
+    const mine = e.by === S.me;
+    const label = e.kind === 'busy' ? `${S.names.parent}の予定` : STATUS[e.status];
+    let h = `<div class="card ${e.status}" data-id="${e.id}"><span class="badge ${e.status}">${label}</span>`;
+    if (e.kind === 'request') h += `<span class="who">${esc(S.names.son)}さんの申請</span>`;
+    h += `<div class="when">${esc(range(e))}</div><div class="place">${e.kind === 'request' ? '行き先・用途: ' : ''}${esc(e.place)}</div>`;
+    if (e.note) h += `<div class="note">${esc(e.note)}</div>`;
+    if (e.comments && e.comments.length) {
+      h += '<div class="comments">' + e.comments.map((c) => `<div class="bubble ${c.by}"><small>${esc(S.names[c.by])} ${at(c.at)}</small>${esc(c.text)}</div>`).join('') + '</div>';
+    }
+    if (e.kind === 'request') {
+      h += `<div class="cbox"><input type="text" maxlength="500" placeholder="コメントを書く" data-cin="${e.id}"><button class="small ghost" data-act="comment" data-id="${e.id}">送る</button></div>`;
+    }
+    h += '<div class="row">';
+    if (S.me === 'parent' && e.kind === 'request') {
+      h += e.status === 'declined'
+        ? `<button class="ghost" data-act="restore" data-id="${e.id}">否認を取り消す</button>`
+        : `<button class="ng" data-act="decline" data-id="${e.id}">否認する</button>`;
+    }
+    if (mine) {
+      h += `<button class="ghost small" data-act="edit" data-id="${e.id}">変更</button><button class="ng small" data-act="delete" data-id="${e.id}">${e.kind === 'request' ? '申請を取り下げる' : '削除'}</button>`;
+    }
+    return h + '</div></div>';
+  }
+
+  function render() {
+    $('who').textContent = `${S.names[S.me] || ''}さん用の画面`;
+    $('fab').hidden = false;
+    $('fab').textContent = S.me === 'son' ? '＋ 車を借りたい' : '＋ 車を使う予定を入れる';
+    const nowS = nowStr();
+    const rest = S.events.filter((e) => e.end >= nowS).sort(byStart);
+    const ngs = rest.filter((e) => e.status === 'declined' && e.by === 'son');
+    let h = '';
+    if (S.me === 'son' && ngs.length) h += `<div class="banner">否認された予定が ${ngs.length} 件あります。コメントを確認してください。</div>`;
+
+    // カレンダー
+    const y = S.month.getFullYear(), m = S.month.getMonth();
+    const first = new Date(y, m, 1).getDay();
+    const days = new Date(y, m + 1, 0).getDate();
+    h += `<section class="cal"><div class="cal-head"><button class="ghost" data-nav="-1">‹ 前</button><h2>${y}年${m + 1}月</h2><button class="ghost" data-nav="1">次 ›</button></div><div class="grid">`;
+    h += WD.map((w) => `<div class="dow">${w}</div>`).join('');
+    const total = Math.ceil((first + days) / 7) * 7;
+    const today = ymd(new Date());
+    for (let i = 0; i < total; i++) {
+      const d = new Date(y, m, 1 - first + i);
+      const key = ymd(d);
+      const evs = S.events.filter((e) => onDay(e, key)).sort(byStart);
+      const cls = ['cell', d.getMonth() !== m ? 'out' : '', key === today ? 'today' : '', key === S.sel ? 'sel' : ''].join(' ');
+      h += `<button class="${cls}" data-day="${key}"><span class="num">${d.getDate()}</span>`;
+      evs.slice(0, 2).forEach((e) => { h += `<span class="chip ${e.status}">${ICON[e.status]}${e.start.slice(0, 10) === key ? short(e.start) : '継続'}</span>`; });
+      if (evs.length > 2) h += `<span class="more">他${evs.length - 2}件</span>`;
+      h += '</button>';
+    }
+    h += `</div><div class="legend"><span>○予定</span><span>▲${esc(S.names.parent || '')}の予定</span><span>×否認</span></div></section>`;
+
+    // 選んだ日
+    const dayEvs = S.events.filter((e) => onDay(e, S.sel)).sort(byStart);
+    h += `<h3>${fmtDay(S.sel)} の予定</h3>`;
+    h += dayEvs.length ? dayEvs.map(cardHtml).join('') : '<div class="empty">この日の予定はありません</div>';
+
+    h += '<h3>これからの予定</h3>' + (rest.length ? rest.map(cardHtml).join('') : '<div class="empty">まだありません</div>');
+    // 入力途中のコメントを保持
+    const keep = {};
+    document.querySelectorAll('[data-cin]').forEach((i) => { if (i.value) keep[i.dataset.cin] = i.value; });
+    const active = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.cin : null;
+    $('main').innerHTML = h;
+    document.querySelectorAll('[data-cin]').forEach((i) => { if (keep[i.dataset.cin]) i.value = keep[i.dataset.cin]; });
+    if (active) { const el = document.querySelector(`[data-cin="${active}"]`); if (el) el.focus(); }
+  }
+
+  // ---- 操作 ----
+  async function run(fn) {
+    if (S.busy) return;
+    S.busy = true;
+    try { await fn(); await refresh(); } catch (e) { if (e.message !== 'unauthorized') alert(e.message); } finally { S.busy = false; }
+  }
+
+  $('main').addEventListener('click', (ev) => {
+    const t = ev.target.closest('button');
+    if (!t) return;
+    if (t.dataset.nav) { S.month = new Date(S.month.getFullYear(), S.month.getMonth() + Number(t.dataset.nav), 1); render(); return; }
+    if (t.dataset.day) {
+      S.sel = t.dataset.day;
+      const d = new Date(S.sel + 'T00:00');
+      if (d.getMonth() !== S.month.getMonth()) S.month = new Date(d.getFullYear(), d.getMonth(), 1);
+      render(); return;
+    }
+    const id = t.dataset.id, act = t.dataset.act;
+    if (!act) return;
+    const e = S.events.find((x) => x.id === id);
+    if (act === 'comment') {
+      const inp = document.querySelector(`[data-cin="${id}"]`);
+      const text = inp.value.trim();
+      if (!text) return;
+      run(async () => { await api(`/api/events/${id}/comments`, 'POST', { text }); inp.value = ''; });
+    } else if (act === 'restore' || act === 'decline') {
+      const inp = document.querySelector(`[data-cin="${id}"]`);
+      const comment = inp ? inp.value.trim() : '';
+      if (act === 'decline' && !confirm('この申請を否認します。よろしいですか?(コメント欄に理由を書くと一緒に伝わります)')) return;
+      run(async () => { await api(`/api/events/${id}/decision`, 'POST', { action: act, comment }); if (inp) inp.value = ''; });
+    } else if (act === 'delete') {
+      if (!confirm(e.kind === 'request' ? 'この申請を取り下げますか?' : 'この予定を削除しますか?')) return;
+      run(() => api(`/api/events/${id}`, 'DELETE'));
+    } else if (act === 'edit') {
+      openForm(e);
+    }
+  });
+
+  // ---- 入力フォーム ----
+  let editing = null;
+  function openForm(e) {
+    editing = e || null;
+    const isSon = S.me === 'son';
+    $('formTitle').textContent = e ? '予定を変更' : (isSon ? '車を借りたい' : '車を使う予定を入れる');
+    $('fPlaceLabel').textContent = isSon ? '行き先・用途' : '予定の内容(例: 病院、買い物)';
+    $('formOk').textContent = e ? '保存する' : (isSon ? '申請する' : '予定を入れる');
+    if (e) {
+      $('fStart').value = e.start; $('fEnd').value = e.end; $('fPlace').value = e.place; $('fNote').value = e.note || '';
+    } else {
+      $('fStart').value = `${S.sel}T10:00`; $('fEnd').value = `${S.sel}T15:00`; $('fPlace').value = ''; $('fNote').value = '';
+    }
+    $('formErr').textContent = '';
+    $('dlgForm').showModal();
+  }
+  $('fab').onclick = () => openForm(null);
+  $('formCancel').onclick = () => $('dlgForm').close();
+  $('fStart').addEventListener('change', () => {
+    // 開始を動かしたら、終了が開始以前のときだけ同日の+3時間に直す
+    if ($('fEnd').value <= $('fStart').value) {
+      const d = new Date($('fStart').value); d.setHours(d.getHours() + 3);
+      $('fEnd').value = `${ymd(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+  });
+  $('form').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    if (S.busy) return;
+    S.busy = true; $('formOk').disabled = true; $('formErr').textContent = '';
+    try {
+      const body = { start: $('fStart').value, end: $('fEnd').value, place: $('fPlace').value, note: $('fNote').value };
+      const r = editing ? await api(`/api/events/${editing.id}`, 'PATCH', body) : await api('/api/events', 'POST', body);
+      $('dlgForm').close();
+      S.sel = r.event.start.slice(0, 10);
+      S.month = new Date(Number(S.sel.slice(0, 4)), Number(S.sel.slice(5, 7)) - 1, 1);
+      S.busy = false;
+      await refresh();
+    } catch (e) { $('formErr').textContent = e.message; }
+    finally { S.busy = false; $('formOk').disabled = false; }
+  });
+
+  // ---- LINE設定 ----
+  async function openLine() {
+    const body = $('lineBody');
+    const add = CFG.LINE_ADD_URL ? `<p><a href="${esc(CFG.LINE_ADD_URL)}">① LINE公式アカウントを友だち追加する</a></p>` : '<p>① 車カレンダーのLINE公式アカウントを友だち追加します。</p>';
+    body.innerHTML = S.lineLinked
+      ? '<p>LINE通知は<b>連携済み</b>です。</p><div class="row"><button id="lineTest" class="small">テスト通知を送る</button></div><div class="err" id="lineMsg"></div><div class="row"><button id="lineRe" class="ghost small">連携し直す</button></div>'
+      : `${add}<p>② 下のボタンで6桁の数字を出し、LINEのトークに<b>「連携 数字」</b>と送ります。</p><div class="row"><button id="lineCode">数字を出す</button></div><div id="lineCodeBox"></div>`;
+    $('dlgLine').showModal();
+    const codeBtn = $('lineCode') || $('lineRe');
+    if (codeBtn) codeBtn.onclick = async () => {
+      try {
+        const d = await api('/api/line/code', 'POST');
+        $('lineBody').insertAdjacentHTML('beforeend', `<div class="code">${d.code}</div><p>LINEのトークに「連携 ${d.code}」と送ってください(${d.expiresInMinutes}分以内)。送ったらこの画面を閉じて、もう一度「LINE通知」を開くと連携済みになります。</p>`);
+        codeBtn.disabled = true;
+      } catch (e) { alert(e.message); }
+    };
+    if ($('lineTest')) $('lineTest').onclick = async () => {
+      try { const d = await api('/api/line/test', 'POST'); $('lineMsg').textContent = d.ok ? 'LINEに送りました' : '送れませんでした。連携し直してみてください'; } catch (e) { $('lineMsg').textContent = e.message; }
+    };
+  }
+  $('btnLine').onclick = openLine;
+  $('lineClose').onclick = () => { $('dlgLine').close(); refresh(); };
+
+  // ---- 起動・更新 ----
+  refresh();
+  setInterval(() => { if (!document.hidden && !$('dlgForm').open && !$('dlgLine').open && !document.activeElement.matches('input,textarea')) refresh(); }, 30000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && !$('dlgForm').open) refresh(); });
+})();
+</script>
+</body>
+</html>
