@@ -6,7 +6,7 @@ compatibility_date = "2025-01-01"
 # 画面(GitHub Pages)のURL。LINE通知に付くリンクの元になる。GitHubユーザー名/リポジトリ名に合わせて書き換える
 SITE_URL = "https://ykdtmnhnddsbba-jj.github.io/oya-kuruma/"
 NAME_SON = "たろう"
-NAME_PARENT = "お母さん"
+NAME_PARENT = "母"
 
 [[kv_namespaces]]
 binding = "KV"

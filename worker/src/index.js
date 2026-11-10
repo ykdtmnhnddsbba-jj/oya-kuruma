@@ -37,7 +37,9 @@ function roleOf(req, env) {
 }
 
 const nameOf = (env, role) =>
-  role === 'son' ? env.NAME_SON || 'たろう' : env.NAME_PARENT || 'お母さん';
+  role === 'son' ? env.NAME_SON || 'たろう' : env.NAME_PARENT || '母';
+// 呼び方: 子は「たろうさん」、親は「母」(敬称なし)
+const callName = (env, role) => (role === 'son' ? `${nameOf(env, 'son')}さん` : nameOf(env, 'parent'));
 
 // ---------- データ ----------
 async function load(env) {
@@ -162,7 +164,7 @@ async function handleWebhook(req, env, ctx) {
         if (role) {
           await env.KV.put('line:' + role, uid);
           await env.KV.delete('code:' + code);
-          ctx.waitUntil(lineReply(env, ev.replyToken, `連携できました(${nameOf(env, role)}さん用)。これから車の予定の通知がここに届きます。`));
+          ctx.waitUntil(lineReply(env, ev.replyToken, `連携できました(${callName(env, role)}用)。これから車の予定の通知がここに届きます。`));
         } else {
           ctx.waitUntil(lineReply(env, ev.replyToken, '数字が違うか、期限切れです。サイトでもう一度数字を出してください。'));
         }
@@ -254,7 +256,7 @@ async function route(req, env, ctx) {
       : range(first);
     const tag = rep ? '(くり返し)' : '';
     if (me === 'parent') {
-      notify('son', `【親の予定${tag}】\n${nameOf(env, 'parent')}さんが車を使う予定を入れました。\n${whenText}\n内容: ${first.place}${skipText}`);
+      notify('son', `【親の予定${tag}】\n${callName(env, 'parent')}が車を使う予定を入れました。\n${whenText}\n内容: ${first.place}${skipText}`);
     }
     return json({ event: first, events: created, skipped }, 201);
   }
@@ -297,7 +299,7 @@ async function route(req, env, ctx) {
       ev.updatedAt = now;
       events[idx] = ev;
       await save(env, events);
-      notify(other, `【コメント】${nameOf(env, me)}さんより\n${range(ev)}(${ev.place})\n\n${msg}`);
+      notify(other, `【コメント】${callName(env, me)}より\n${range(ev)}(${ev.place})\n\n${msg}`);
       return json({ event: ev });
     }
 
@@ -336,7 +338,7 @@ async function route(req, env, ctx) {
       await save(env, events.filter((e) => !ids.has(e.id)));
       const sentRemoved = removed.filter((e) => e.status !== 'draft');
       if (removed.length > 1 && sentRemoved.length > 1) {
-        notify(other, `【くり返しの予定を取り消し】\n${nameOf(env, me)}さんが ${fmtDay(ev.start)} 以降の ${sentRemoved.length}回分(${ev.place})を取り消しました。`);
+        notify(other, `【くり返しの予定を取り消し】\n${callName(env, me)}が ${fmtDay(ev.start)} 以降の ${sentRemoved.length}回分(${ev.place})を取り消しました。`);
       } else if (ev.kind === 'request' && ev.status === 'active' && removed.length === 1) {
         notify('parent', `【申請の取り消し】\n${nameOf(env, 'son')}さんが取り消しました。\n${range(ev)}(${ev.place})`);
       } else if (ev.kind === 'busy') {

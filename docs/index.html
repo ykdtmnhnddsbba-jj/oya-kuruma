@@ -130,7 +130,7 @@ dialog h2 { margin: 0 0 4px; font-size: 19px; }
         <div class="note">1回ずつの予定として登録されます。あとから1回だけ変更・否認もできます。</div>
       </div>
     </div>
-    <div class="note" id="draftNote" hidden>ここで入れた予定は「下書き」です。画面上の「まとめて送る」を押すまで、お母さんには見えず、LINEも届きません。</div>
+    <div class="note" id="draftNote" hidden>ここで入れた予定は「下書き」です。画面上の「まとめて送る」を押すまで、母には見えず、LINEも届きません。</div>
     <div class="note" id="editNote" hidden>くり返しのうち、この1回だけを変更します。</div>
     <div class="err" id="formErr"></div>
     <div class="row">
@@ -234,7 +234,7 @@ dialog h2 { margin: 0 0 4px; font-size: 19px; }
   }
 
   function render() {
-    $('who').textContent = `${S.names[S.me] || ''}さん用の画面`;
+    $('who').textContent = S.me === 'son' ? `${S.names.son || ''}さん用の画面` : `${S.names.parent || '母'}用の画面`;
     $('fab').hidden = false;
     $('fab').textContent = S.me === 'son' ? '＋ 車を借りたい' : '＋ 車を使う予定を入れる';
     const nowS = nowStr();
@@ -242,7 +242,7 @@ dialog h2 { margin: 0 0 4px; font-size: 19px; }
     const ngs = rest.filter((e) => e.status === 'declined' && e.by === 'son');
     let h = '';
     const drafts = S.events.filter((e) => e.status === 'draft');
-    if (S.me === 'son' && drafts.length) h += `<div class="sendbar"><div><b>下書き ${drafts.length}件</b><span>まだお母さんには届いていません</span></div><button data-send="1">まとめて送る</button></div>`;
+    if (S.me === 'son' && drafts.length) h += `<div class="sendbar"><div><b>下書き ${drafts.length}件</b><span>まだ母には届いていません</span></div><button data-send="1">まとめて送る</button></div>`;
     if (S.me === 'son' && ngs.length) h += `<div class="banner">否認された予定が ${ngs.length} 件あります。コメントを確認してください。</div>`;
 
     // カレンダー
@@ -301,7 +301,7 @@ dialog h2 { margin: 0 0 4px; font-size: 19px; }
     if (!t) return;
     if (t.dataset.send) {
       const n = S.events.filter((e) => e.status === 'draft').length;
-      if (!confirm(`下書き ${n}件を、お母さんにLINEで1通にまとめて送ります。よろしいですか?`)) return;
+      if (!confirm(`下書き ${n}件を、母にLINEで1通にまとめて送ります。よろしいですか?`)) return;
       run(async () => {
         const r = await api('/api/send', 'POST');
         toast(`${r.sent}件を送りました`);

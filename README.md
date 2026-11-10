@@ -50,7 +50,7 @@ $tokParent = New-Token
 $tokSon | npx wrangler secret put TOKEN_SON
 $tokParent | npx wrangler secret put TOKEN_PARENT
 $base = "https://ykdtmnhnddsbba-jj.github.io/oya-kuruma/"
-@("たろう用: $base#t=$tokSon", "お母さん用: $base#t=$tokParent") | Set-Content -Encoding utf8 .links.txt
+@("たろう用: $base#t=$tokSon", "母用: $base#t=$tokParent") | Set-Content -Encoding utf8 .links.txt
 Get-Content .links.txt
 ```
 表示された2つのリンクが、それぞれの専用リンク。`worker\.links.txt` にも保存される(GitHubには上がらない。消さない)。
@@ -85,7 +85,7 @@ git push
 ```
 
 ## 手順9: 使い始める
-1. `worker\.links.txt` の「たろう用」リンクを自分のスマホで、「お母さん用」リンクを母のiPhoneで開く(LINEで母に送ればOK)。
+1. `worker\.links.txt` の「たろう用」リンクを自分のスマホで、「母用」リンクを母のiPhoneで開く(LINEで母に送ればOK)。
 2. それぞれ右上「LINE通知」→ 友だち追加 → 出てきた数字を LINE に「連携 123456」と送る。
 3. 「LINE通知」をもう一度開いて「テスト通知を送る」。届けば完了。
 4. 母のiPhoneは、Safariで共有ボタン →「ホーム画面に追加」すると、アプリのように開ける。
