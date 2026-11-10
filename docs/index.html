@@ -50,17 +50,25 @@ main { padding: 0 12px; max-width: 720px; margin: 0 auto; }
 .chip { font-size: 11px; line-height: 1.25; border-radius: 5px; padding: 1px 3px; white-space: nowrap; overflow: hidden; text-overflow: clip; font-weight: 600; }
 .chip.active { background: var(--ok-bg); color: #1b6b3c; }
 .chip.busy { background: var(--busy-bg); color: #254e9e; }
+.chip.draft { background: #eef1f6; color: #4a5568; border: 1px dashed #8a94a6; }
 .chip.declined { background: var(--ng-bg); color: var(--ng); text-decoration: line-through; }
 .more { font-size: 11px; color: var(--sub); padding-left: 3px; }
 .legend { display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: 13px; color: var(--sub); padding: 8px 8px 0; }
+.sendbar { position: sticky; top: 0; z-index: 5; background: #e8eefc; border: 2px solid #3b6fd4; border-radius: 14px; padding: 10px 12px; margin: 8px 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; box-shadow: 0 2px 8px rgba(0,0,0,.12); }
+.sendbar b { display: block; }
+.sendbar span { font-size: 13px; color: var(--sub); }
+.sendbar button { background: #3b6fd4; flex: 0 0 auto; font-weight: 700; }
+.toast { position: fixed; left: 12px; right: 12px; bottom: calc(80px + env(safe-area-inset-bottom)); max-width: 696px; margin: 0 auto; background: #222; color: #fff; border-radius: 12px; padding: 12px 14px; z-index: 20; font-size: 15px; }
 h3 { font-size: 17px; margin: 22px 4px 8px; }
 .card { background: var(--card); border: 1px solid var(--line); border-left: 8px solid var(--line); border-radius: 14px; padding: 12px 14px; margin: 10px 0; }
 .card.active { border-left-color: var(--ok); }
 .card.busy { border-left-color: var(--busy); }
+.card.draft { border-left-color: #8a94a6; border-style: dashed; background: #f4f6fa; }
 .card.declined { border-left-color: var(--ng); background: #f7f7f7; }
 .badge { display: inline-block; font-size: 13px; font-weight: 700; border-radius: 999px; padding: 0 10px; margin-right: 6px; color: #fff; }
 .badge.active { background: var(--ok); }
 .badge.busy { background: var(--busy); }
+.badge.draft { background: #6b7587; }
 .badge.declined { background: var(--ng); }
 .when { font-size: 18px; font-weight: 700; margin: 4px 0 0; }
 .place { margin: 2px 0; }
@@ -122,6 +130,7 @@ dialog h2 { margin: 0 0 4px; font-size: 19px; }
         <div class="note">1回ずつの予定として登録されます。あとから1回だけ変更・否認もできます。</div>
       </div>
     </div>
+    <div class="note" id="draftNote" hidden>ここで入れた予定は「下書き」です。画面上の「まとめて送る」を押すまで、お母さんには見えず、LINEも届きません。</div>
     <div class="note" id="editNote" hidden>くり返しのうち、この1回だけを変更します。</div>
     <div class="err" id="formErr"></div>
     <div class="row">
@@ -143,8 +152,8 @@ dialog h2 { margin: 0 0 4px; font-size: 19px; }
   const CFG = window.OYA_CONFIG;
   const $ = (id) => document.getElementById(id);
   const WD = ['日', '月', '火', '水', '木', '金', '土'];
-  const STATUS = { active: '予定', declined: '否認', busy: '親の予定' };
-  const ICON = { active: '○', declined: '×', busy: '▲' };
+  const STATUS = { active: '予定', draft: '下書き', declined: '否認', busy: '親の予定' };
+  const ICON = { active: '○', draft: '△', declined: '×', busy: '▲' };
   const pad = (n) => String(n).padStart(2, '0');
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -208,7 +217,7 @@ dialog h2 { margin: 0 0 4px; font-size: 19px; }
     if (e.comments && e.comments.length) {
       h += '<div class="comments">' + e.comments.map((c) => `<div class="bubble ${c.by}"><small>${esc(S.names[c.by])} ${at(c.at)}</small>${esc(c.text)}</div>`).join('') + '</div>';
     }
-    if (e.kind === 'request') {
+    if (e.kind === 'request' && e.status !== 'draft') {
       h += `<div class="cbox"><input type="text" maxlength="500" placeholder="コメントを書く" data-cin="${e.id}"><button class="small ghost" data-act="comment" data-id="${e.id}">送る</button></div>`;
     }
     h += '<div class="row">';
@@ -232,6 +241,8 @@ dialog h2 { margin: 0 0 4px; font-size: 19px; }
     const rest = S.events.filter((e) => e.end >= nowS).sort(byStart);
     const ngs = rest.filter((e) => e.status === 'declined' && e.by === 'son');
     let h = '';
+    const drafts = S.events.filter((e) => e.status === 'draft');
+    if (S.me === 'son' && drafts.length) h += `<div class="sendbar"><div><b>下書き ${drafts.length}件</b><span>まだお母さんには届いていません</span></div><button data-send="1">まとめて送る</button></div>`;
     if (S.me === 'son' && ngs.length) h += `<div class="banner">否認された予定が ${ngs.length} 件あります。コメントを確認してください。</div>`;
 
     // カレンダー
@@ -252,7 +263,7 @@ dialog h2 { margin: 0 0 4px; font-size: 19px; }
       if (evs.length > 2) h += `<span class="more">他${evs.length - 2}件</span>`;
       h += '</button>';
     }
-    h += `</div><div class="legend"><span>○予定</span><span>▲${esc(S.names.parent || '')}の予定</span><span>×否認</span></div></section>`;
+    h += `</div><div class="legend"><span>○予定</span><span>△下書き(未送信)</span><span>▲${esc(S.names.parent || '')}の予定</span><span>×否認</span></div></section>`;
 
     // 選んだ日
     const dayEvs = S.events.filter((e) => onDay(e, S.sel)).sort(byStart);
@@ -269,6 +280,15 @@ dialog h2 { margin: 0 0 4px; font-size: 19px; }
     if (active) { const el = document.querySelector(`[data-cin="${active}"]`); if (el) el.focus(); }
   }
 
+  let toastTimer = null;
+  function toast(msg) {
+    let el = document.getElementById('toast');
+    if (!el) { el = document.createElement('div'); el.id = 'toast'; el.className = 'toast'; document.body.appendChild(el); }
+    el.textContent = msg; el.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { el.hidden = true; }, 4000);
+  }
+
   // ---- 操作 ----
   async function run(fn) {
     if (S.busy) return;
@@ -279,6 +299,16 @@ dialog h2 { margin: 0 0 4px; font-size: 19px; }
   $('main').addEventListener('click', (ev) => {
     const t = ev.target.closest('button');
     if (!t) return;
+    if (t.dataset.send) {
+      const n = S.events.filter((e) => e.status === 'draft').length;
+      if (!confirm(`下書き ${n}件を、お母さんにLINEで1通にまとめて送ります。よろしいですか?`)) return;
+      run(async () => {
+        const r = await api('/api/send', 'POST');
+        toast(`${r.sent}件を送りました`);
+        if (r.skipped && r.skipped.length) alert('次の分は、ほかの予定と重なるため送らず、下書きに残しました:\n' + r.skipped.map((x) => fmtDay(x.start) + ' ' + x.reason).join('\n'));
+      });
+      return;
+    }
     if (t.dataset.nav) { S.month = new Date(S.month.getFullYear(), S.month.getMonth() + Number(t.dataset.nav), 1); render(); return; }
     if (t.dataset.day) {
       S.sel = t.dataset.day;
@@ -317,7 +347,7 @@ dialog h2 { margin: 0 0 4px; font-size: 19px; }
     const isSon = S.me === 'son';
     $('formTitle').textContent = e ? '予定を変更' : (isSon ? '車を借りたい' : '車を使う予定を入れる');
     $('fPlaceLabel').textContent = isSon ? '行き先・用途' : '予定の内容(例: 病院、買い物)';
-    $('formOk').textContent = e ? '保存する' : (isSon ? '申請する' : '予定を入れる');
+    $('formOk').textContent = e ? '保存する' : (isSon ? '下書きに入れる' : '予定を入れる');
     if (e) {
       $('fStart').value = e.start; $('fEnd').value = e.end; $('fPlace').value = e.place; $('fNote').value = e.note || '';
     } else {
@@ -326,6 +356,7 @@ dialog h2 { margin: 0 0 4px; font-size: 19px; }
     $('formErr').textContent = '';
     $('repeatBox').hidden = !!e;
     $('editNote').hidden = !(e && e.seriesId);
+    $('draftNote').hidden = !(isSon && (!e || e.status === 'draft'));
     $('fRepeat').value = '';
     $('untilBox').hidden = true;
     $('fUntil').value = '';
@@ -357,6 +388,7 @@ dialog h2 { margin: 0 0 4px; font-size: 19px; }
       const body = { start: $('fStart').value, end: $('fEnd').value, place: $('fPlace').value, note: $('fNote').value };
       if (!editing && $('fRepeat').value) body.repeat = { type: $('fRepeat').value, until: $('fUntil').value };
       const r = editing ? await api(`/api/events/${editing.id}`, 'PATCH', body) : await api('/api/events', 'POST', body);
+      if (!editing && S.me === 'son') toast(`下書きに入れました(${r.events.length}件)。「まとめて送る」で母に届きます`);
       if (r.skipped && r.skipped.length) {
         alert(`${r.events.length}回分を登録しました。\n次の日は、ほかの予定と重なるため除きました:\n` + r.skipped.map((x) => fmtDay(x.start)).join('、'));
       }

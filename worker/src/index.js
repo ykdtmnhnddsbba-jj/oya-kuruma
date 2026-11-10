@@ -59,12 +59,13 @@ function checkTimes(start, end) {
 }
 
 const overlap = (a, b) => a.start < b.end && b.start < a.end;
-const blocking = (e) => e.status === 'active' || e.status === 'busy';
+// 下書きは、同じ人の予定にだけ影響する(親から見えないため)
+const blocks = (e, cand) => e.status === 'active' || e.status === 'busy' || (e.status === 'draft' && e.by === cand.by);
 
 function checkConflict(events, cand, selfId) {
-  const hit = events.find((e) => e.id !== selfId && blocking(e) && overlap(e, cand));
+  const hit = events.find((e) => e.id !== selfId && blocks(e, cand) && overlap(e, cand));
   if (hit) {
-    const what = hit.status === 'busy' ? `親の予定「${hit.place}」` : 'ほかの予定';
+    const what = hit.status === 'busy' ? `親の予定「${hit.place}」` : hit.status === 'draft' ? '下書きの予定' : 'ほかの予定';
     throw new HttpError(409, `${what}(${range(hit)})と時間が重なっています`);
   }
 }
@@ -199,7 +200,7 @@ async function route(req, env, ctx) {
     return json({
       me,
       names: { son: nameOf(env, 'son'), parent: nameOf(env, 'parent') },
-      events: await load(env),
+      events: (await load(env)).filter((e) => me === 'son' || e.status !== 'draft'),
       lineLinked: !!(await env.KV.get('line:' + me)),
     });
   }
@@ -225,11 +226,11 @@ async function route(req, env, ctx) {
         note: text(b.note, 300),
         start: st,
         end: en,
-        status: me === 'son' ? 'active' : 'busy',
+        status: me === 'son' ? 'draft' : 'busy',
         comments: [],
         createdAt: now,
         updatedAt: now,
-        ...(seriesId ? { seriesId } : {}),
+        ...(seriesId ? { seriesId, repeat: rep.type } : {}),
       };
       try {
         checkConflict(events, ev, null);
@@ -252,9 +253,7 @@ async function route(req, env, ctx) {
       ? `${REPEAT_LABEL[rep.type]} ${first.start.slice(11, 16)}〜${first.end.slice(11, 16)} 計${created.length}回\n${fmtDay(first.start)} 〜 ${fmtDay(last.start)}`
       : range(first);
     const tag = rep ? '(くり返し)' : '';
-    if (me === 'son') {
-      notify('parent', `【車を借りたい${tag}】\n${nameOf(env, 'son')}さんから申請です。\n${whenText}\n行き先・用途: ${first.place}${first.note ? '\nメモ: ' + first.note : ''}${skipText}\n\n問題があれば、サイトで「否認」かコメントをお願いします。`);
-    } else {
+    if (me === 'parent') {
       notify('son', `【親の予定${tag}】\n${nameOf(env, 'parent')}さんが車を使う予定を入れました。\n${whenText}\n内容: ${first.place}${skipText}`);
     }
     return json({ event: first, events: created, skipped }, 201);
@@ -265,7 +264,7 @@ async function route(req, env, ctx) {
     const [, id, sub] = m;
     const events = await load(env);
     const idx = events.findIndex((e) => e.id === id);
-    if (idx < 0) throw new HttpError(404, '予定が見つかりません(削除された可能性があります)');
+    if (idx < 0 || (me === 'parent' && events[idx].status === 'draft')) throw new HttpError(404, '予定が見つかりません(削除された可能性があります)');
     const ev = events[idx];
     const now = new Date().toISOString();
 
@@ -290,6 +289,7 @@ async function route(req, env, ctx) {
     // コメント(両者)
     if (sub === 'comments' && method === 'POST') {
       if (ev.kind !== 'request') throw new HttpError(400, 'コメントできるのは申請だけです');
+      if (ev.status === 'draft') throw new HttpError(400, '下書きにはコメントできません。先に母へ送ってください');
       const b = await readBody();
       const msg = text(b.text, 500);
       if (!msg) throw new HttpError(400, 'コメントを入れてください');
@@ -317,7 +317,9 @@ async function route(req, env, ctx) {
       next.updatedAt = now;
       events[idx] = next;
       await save(env, events);
-      if (next.kind === 'request') {
+      if (next.status === 'draft') {
+        // 下書きの変更は通知しない
+      } else if (next.kind === 'request') {
         notify('parent', `【申請を変更しました】\n${nameOf(env, 'son')}さんの申請が変わりました。\n${range(next)}\n行き先・用途: ${next.place}${next.note ? '\nメモ: ' + next.note : ''}`);
       } else {
         notify('son', `【親の予定を変更】\n${range(next)}\n内容: ${next.place}`);
@@ -332,15 +334,65 @@ async function route(req, env, ctx) {
       const removed = following ? events.filter((e) => e.seriesId === ev.seriesId && e.by === me && e.start >= ev.start) : [ev];
       const ids = new Set(removed.map((e) => e.id));
       await save(env, events.filter((e) => !ids.has(e.id)));
-      if (removed.length > 1) {
-        notify(other, `【くり返しの予定を取り消し】\n${nameOf(env, me)}さんが ${fmtDay(ev.start)} 以降の ${removed.length}回分(${ev.place})を取り消しました。`);
-      } else if (ev.kind === 'request' && ev.status === 'active') {
+      const sentRemoved = removed.filter((e) => e.status !== 'draft');
+      if (removed.length > 1 && sentRemoved.length > 1) {
+        notify(other, `【くり返しの予定を取り消し】\n${nameOf(env, me)}さんが ${fmtDay(ev.start)} 以降の ${sentRemoved.length}回分(${ev.place})を取り消しました。`);
+      } else if (ev.kind === 'request' && ev.status === 'active' && removed.length === 1) {
         notify('parent', `【申請の取り消し】\n${nameOf(env, 'son')}さんが取り消しました。\n${range(ev)}(${ev.place})`);
       } else if (ev.kind === 'busy') {
         notify('son', `【親の予定を削除】\n${range(ev)}(${ev.place})の予定がなくなりました。`);
       }
       return json({ ok: true, removed: removed.length });
     }
+  }
+
+  // 下書きをまとめて母へ送る(LINEは1通)
+  if (path === '/api/send' && method === 'POST') {
+    if (me !== 'son') throw new HttpError(403, '送れるのは申請する側だけです');
+    const events = await load(env);
+    const drafts = events.filter((e) => e.by === 'son' && e.kind === 'request' && e.status === 'draft').sort((a, b) => (a.start < b.start ? -1 : 1));
+    if (!drafts.length) throw new HttpError(400, '送る下書きがありません');
+    const now = new Date().toISOString();
+    const sent = [];
+    const skipped = [];
+    for (const ev of drafts) {
+      const hit = events.find((x) => x.id !== ev.id && (x.status === 'active' || x.status === 'busy') && overlap(x, ev));
+      if (hit) {
+        skipped.push({ id: ev.id, start: ev.start, reason: `${hit.status === 'busy' ? `親の予定「${hit.place}」` : 'ほかの予定'}(${range(hit)})と重なっています` });
+        continue;
+      }
+      ev.status = 'active';
+      ev.sentAt = now;
+      ev.updatedAt = now;
+      sent.push(ev);
+    }
+    if (!sent.length) throw new HttpError(409, skipped[0].reason);
+    await save(env, events);
+    const lines = [];
+    const groups = new Map();
+    for (const ev of sent) {
+      if (ev.seriesId) {
+        if (!groups.has(ev.seriesId)) {
+          const g = { list: [] };
+          groups.set(ev.seriesId, g);
+          lines.push(g);
+        }
+        groups.get(ev.seriesId).list.push(ev);
+      } else {
+        lines.push(`${range(ev)} ${ev.place}${ev.note ? '(' + ev.note + ')' : ''}`);
+      }
+    }
+    const textLines = lines.map((l) => {
+      if (typeof l === 'string') return l;
+      const f = l.list[0];
+      const e2 = l.list[l.list.length - 1];
+      return `${REPEAT_LABEL[f.repeat] || 'くり返し'} ${f.start.slice(11, 16)}〜${f.end.slice(11, 16)} ${f.place}(${fmtDay(f.start)}〜${fmtDay(e2.start)} 計${l.list.length}回)`;
+    });
+    const shown = textLines.slice(0, 12).map((t) => '・' + t);
+    if (textLines.length > 12) shown.push(`ほか ${textLines.length - 12}件`);
+    const skipText = skipped.length ? `\n\n重なりのため送らなかった分: ${skipped.map((x) => fmtDay(x.start)).join('、')}` : '';
+    ctx.waitUntil(linePush(env, 'parent', `【車を借りたい】\n${nameOf(env, 'son')}さんから ${sent.length}件の申請です。\n\n${shown.join('\n')}${skipText}\n\n問題があれば、サイトで「否認」かコメントをお願いします。`).catch(() => {}));
+    return json({ sent: sent.length, skipped });
   }
 
   // LINE連携

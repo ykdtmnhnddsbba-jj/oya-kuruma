@@ -51,35 +51,53 @@ await webhook([{ type: 'message', replyToken: 'r', source: { userId: 'U_PAR' }, 
 assert.equal(store.get('line:parent'), 'U_PAR');
 assert.equal((await call('GET', '/api/events', S)).data.lineLinked, true);
 
-// 申請 → 親にLINE
+// ---- 下書き → まとめて送信 ----
 pushes.length = 0;
 let r = await call('POST', '/api/events', S, { start: '2026-11-15T10:00', end: '2026-11-15T15:00', place: '買い物', note: '' });
 assert.equal(r.status, 201);
-assert.equal(r.data.event.status, 'active');
-assert.equal(pushes.at(-1).body.to, 'U_PAR');
-assert.match(pushes.at(-1).body.messages[0].text, /parent-token/);
+assert.equal(r.data.event.status, 'draft');
+assert.equal(pushes.length, 0); // 下書きではLINEを送らない
 const id = r.data.event.id;
-
+assert.equal((await call('GET', '/api/events', P)).data.events.length, 0); // 親には見えない
+assert.equal((await call('GET', '/api/events', S)).data.events.length, 1);
+assert.equal((await call('POST', `/api/events/${id}/decision`, P, { action: 'decline' })).status, 404);
+assert.equal((await call('POST', `/api/events/${id}/comments`, S, { text: 'x' })).status, 400);
+// 下書き同士は重ならない
+assert.equal((await call('POST', '/api/events', S, { start: '2026-11-15T14:00', end: '2026-11-15T16:00', place: 'a' })).status, 409);
+// 下書きの変更・削除は通知しない
+r = await call('POST', '/api/events', S, { start: '2026-11-16T10:00', end: '2026-11-16T11:00', place: 'tmp' });
+await call('PATCH', `/api/events/${r.data.event.id}`, S, { place: 'tmp2' });
+await call('DELETE', `/api/events/${r.data.event.id}`, S);
+assert.equal(pushes.length, 0);
 // 入力チェック
 assert.equal((await call('POST', '/api/events', S, { start: '2026-11-15T10:00', end: '2026-11-15T09:00', place: 'x' })).status, 400);
 assert.equal((await call('POST', '/api/events', S, { start: '2026-11-15T10:00', end: '2026-11-15T11:00', place: '' })).status, 400);
+// 親は送れない / 送ると1通だけ届く
+assert.equal((await call('POST', '/api/send', P)).status, 403);
+r = await call('POST', '/api/send', S);
+assert.equal(r.data.sent, 1);
+assert.equal(pushes.length, 1);
+assert.equal(pushes.at(-1).body.to, 'U_PAR');
+assert.match(pushes.at(-1).body.messages[0].text, /買い物/);
+assert.match(pushes.at(-1).body.messages[0].text, /parent-token/);
+assert.equal((await call('POST', '/api/send', S)).status, 400); // 送る下書きなし
+assert.equal((await call('GET', '/api/events', P)).data.events[0].status, 'active'); // 親に見える
 
 // 子は否認できない
 assert.equal((await call('POST', `/api/events/${id}/decision`, S, { action: 'decline' })).status, 403);
-assert.equal(r.data.event.status, 'active');
 
-// コメント往復
+// コメントは即時通知
 pushes.length = 0;
 await call('POST', `/api/events/${id}/comments`, P, { text: '何時に帰る?' });
 assert.equal(pushes.at(-1).body.to, 'U_SON');
 await call('POST', `/api/events/${id}/comments`, S, { text: '15時です' });
 assert.equal(pushes.at(-1).body.to, 'U_PAR');
 
-// 重なる申請は不可、隣接はOK
+// 送信済みと重なる申請は不可、隣接はOK(下書き)
 assert.equal((await call('POST', '/api/events', S, { start: '2026-11-15T14:00', end: '2026-11-15T16:00', place: 'a' })).status, 409);
 assert.equal((await call('POST', '/api/events', S, { start: '2026-11-15T15:00', end: '2026-11-15T16:00', place: 'a' })).status, 201);
 
-// 親の予定: 重なると不可 / 入れると子に通知 / 子の申請が重なると不可 / 子は消せない
+// 親の予定: 重なると不可 / 入れると子に即通知 / 子の申請が重なると不可 / 子は消せない
 assert.equal((await call('POST', '/api/events', P, { start: '2026-11-15T12:00', end: '2026-11-15T13:00', place: '病院' })).status, 409);
 pushes.length = 0;
 r = await call('POST', '/api/events', P, { start: '2026-11-20T09:00', end: '2026-11-20T12:00', place: '病院' });
@@ -88,7 +106,7 @@ assert.equal(pushes.at(-1).body.to, 'U_SON');
 assert.equal((await call('POST', '/api/events', S, { start: '2026-11-20T11:00', end: '2026-11-20T13:00', place: 'a' })).status, 409);
 assert.equal((await call('DELETE', `/api/events/${r.data.event.id}`, S)).status, 403);
 
-// 時間変更しても有効のまま、親に通知
+// 送信済みの時間を変えても有効のまま、親に通知
 pushes.length = 0;
 r = await call('PATCH', `/api/events/${id}`, S, { start: '2026-11-15T09:00', end: '2026-11-15T14:00' });
 assert.equal(r.data.event.status, 'active');
@@ -101,14 +119,17 @@ assert.equal(r.data.event.status, 'declined');
 assert.equal(pushes.at(-1).body.to, 'U_SON');
 assert.match(pushes.at(-1).body.messages[0].text, /否認/);
 assert.match(pushes.at(-1).body.messages[0].text, /その日は使う/);
-// 承認という操作はもう無い
 assert.equal((await call('POST', `/api/events/${id}/decision`, P, { action: 'approve' })).status, 400);
 // 否認された枠は他の申請を邪魔しない
-assert.equal((await call('POST', '/api/events', S, { start: '2026-11-15T09:30', end: '2026-11-15T10:30', place: 'b' })).status, 201);
+r = await call('POST', '/api/events', S, { start: '2026-11-15T09:30', end: '2026-11-15T10:30', place: 'b' });
+assert.equal(r.status, 201);
 // 否認の取り消しは、重なる予定があると不可
 assert.equal((await call('POST', `/api/events/${id}/decision`, P, { action: 'restore' })).status, 409);
-
-// 取り消し
+// まとめて送る(15:00〜16:00の'a'と'b')、取り消しで通知
+pushes.length = 0;
+r = await call('POST', '/api/send', S);
+assert.equal(r.data.sent, 2);
+assert.equal(pushes.length, 1);
 pushes.length = 0;
 const last = (await call('GET', '/api/events', S)).data.events.find((e) => e.place === 'b');
 assert.equal((await call('DELETE', `/api/events/${last.id}`, S)).status, 200);
@@ -121,9 +142,11 @@ r = await call('POST', '/api/events', S, { start: '2026-12-01T10:00', end: '2026
 assert.equal(r.status, 201);
 assert.deepEqual(r.data.events.map((e) => e.start.slice(0, 10)), ['2026-12-01', '2026-12-08', '2026-12-15', '2026-12-22', '2026-12-29']);
 assert.equal(new Set(r.data.events.map((e) => e.seriesId)).size, 1);
+assert.equal(pushes.length, 0); // 下書きなので通知なし
+const series = r.data.events;
+r = await call('POST', '/api/send', S);
 assert.equal(pushes.length, 1); // まとめて1通
 assert.match(pushes[0].body.messages[0].text, /毎週.*計5回/s);
-const series = r.data.events;
 // 1回だけ変更できる(他の回は変わらない)
 r = await call('PATCH', `/api/events/${series[1].id}`, S, { start: '2026-12-08T13:00', end: '2026-12-08T15:00' });
 assert.equal(r.status, 200);
@@ -148,14 +171,26 @@ assert.equal(r.data.events[0].end, '2027-06-01T02:00'); // 日またぎの長さ
 assert.equal((await call('POST', '/api/events', S, { start: '2028-01-01T10:00', end: '2028-01-01T11:00', place: 'z', repeat: { type: 'weekly', until: '2029-12-31' } })).status, 400);
 assert.equal((await call('POST', '/api/events', S, { start: '2028-01-01T10:00', end: '2028-01-01T11:00', place: 'z', repeat: { type: 'daily', until: '2028-02-01' } })).status, 400);
 assert.equal((await call('POST', '/api/events', S, { start: '2028-01-01T10:00', end: '2028-01-01T11:00', place: 'z', repeat: { type: 'weekly' } })).status, 400);
-// この回以降をまとめて取り下げ
+// 送って整理
+r = await call('POST', '/api/send', S);
+assert.equal(r.status, 200);
+// この回以降をまとめて取り下げ(送信済み→通知は1通)
 pushes.length = 0;
 r = await call('DELETE', `/api/events/${series[3].id}?scope=following`, S);
 assert.equal(r.data.removed, 2);
 all = (await call('GET', '/api/events', S)).data.events.filter((e) => e.seriesId === series[0].seriesId);
 assert.equal(all.length, 3);
 assert.equal(pushes.length, 1);
-// 親の他人の回は消せない
 assert.equal((await call('DELETE', `/api/events/${series[0].id}?scope=following`, P)).status, 403);
+
+// ---- 下書きと親の予定が重なる ----
+r = await call('POST', '/api/events', S, { start: '2027-02-01T10:00', end: '2027-02-01T12:00', place: 'd' });
+assert.equal(r.status, 201);
+assert.equal((await call('POST', '/api/events', P, { start: '2027-02-01T11:00', end: '2027-02-01T12:00', place: '用事' })).status, 201); // 下書きは親を邪魔しない
+pushes.length = 0;
+r = await call('POST', '/api/send', S);
+assert.equal(r.status, 409); // 送る時に重なりを検知
+assert.equal(pushes.length, 0);
+assert.equal((await call('GET', '/api/events', S)).data.events.find((e) => e.place === 'd').status, 'draft');
 
 console.log('all tests passed');
