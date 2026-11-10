@@ -1,4 +1,4 @@
-// 親の車カレンダー: API (Cloudflare Workers + KV)
+// 車、ちょっと借ります: API (Cloudflare Workers + KV)
 // 利用者は2人だけ: son(借りる人) と parent(親)。ログイン不要で、専用リンクのトークンで本人確認する。
 
 const CORS = {

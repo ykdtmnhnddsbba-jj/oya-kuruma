@@ -1,4 +1,4 @@
-# 親の車カレンダー セットアップ手順(コピペ用)
+# 車、ちょっと借ります セットアップ手順(コピペ用)
 
 PowerShell は上から順に、ブロックごとにそのまま貼り付けて Enter。`<...>` の部分だけ自分で置き換える。
 
@@ -57,7 +57,7 @@ Get-Content .links.txt
 
 ## 手順6: LINEチャンネルを作る (ブラウザ)
 1. https://developers.line.biz/console/ を開き、Amazon定期便と同じプロバイダーを選ぶ。
-2. 「新規チャネル作成」→「Messaging API」。チャネル名は「車カレンダー」など。
+2. 「新規チャネル作成」→「Messaging API」。チャネル名は「車、ちょっと借ります」など。
 3. 作成後、「Messaging API設定」タブで次を設定:
    - Webhook URL: `https://oya-kuruma.ykdtm-home.workers.dev/api/line/webhook` → 更新 → 「検証」(SSLエラーなら数分待って再検証)
    - Webhookの利用: オン

@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="車カレンダー">
-<title>親の車カレンダー</title>
+<meta name="apple-mobile-web-app-title" content="ちょっと借ります">
+<title>車、ちょっと借ります</title>
 <style>
 :root {
   --bg: #f6f4ef; --card: #fff; --ink: #222; --sub: #6b6b6b; --line: #ddd8cc;
@@ -97,7 +97,7 @@ dialog h2 { margin: 0 0 4px; font-size: 19px; }
 <body>
 <header>
   <div>
-    <h1>親の車カレンダー</h1>
+    <h1>車、ちょっと借ります</h1>
     <div class="who" id="who"></div>
   </div>
   <button class="ghost small" id="btnLine">LINE通知</button>
@@ -404,7 +404,7 @@ dialog h2 { margin: 0 0 4px; font-size: 19px; }
   // ---- LINE設定 ----
   async function openLine() {
     const body = $('lineBody');
-    const add = CFG.LINE_ADD_URL ? `<p><a href="${esc(CFG.LINE_ADD_URL)}">① LINE公式アカウントを友だち追加する</a></p>` : '<p>① 車カレンダーのLINE公式アカウントを友だち追加します。</p>';
+    const add = CFG.LINE_ADD_URL ? `<p><a href="${esc(CFG.LINE_ADD_URL)}">① LINE公式アカウントを友だち追加する</a></p>` : '<p>① 「車、ちょっと借ります」のLINE公式アカウントを友だち追加します。</p>';
     body.innerHTML = S.lineLinked
       ? '<p>LINE通知は<b>連携済み</b>です。</p><div class="row"><button id="lineTest" class="small">テスト通知を送る</button></div><div class="err" id="lineMsg"></div><div class="row"><button id="lineRe" class="ghost small">連携し直す</button></div>'
       : `${add}<p>② 下のボタンで6桁の数字を出し、LINEのトークに<b>「連携 数字」</b>と送ります。</p><div class="row"><button id="lineCode">数字を出す</button></div><div id="lineCodeBox"></div>`;
